@@ -119,6 +119,47 @@ def main():
         envs = MTBenchEnv(env_name, args.device_rank, args.num_envs, args.seed)
         eval_envs = envs
         render_env = envs
+        # ... existing HumanoidBench/IsaacLab env setup ...
+
+    elif args.env_name.startswith("dexmachina"):
+        import sys
+        import os
+        # Ensure Python can find your dexmachina and envs folders
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+        if repo_root not in sys.path:
+            sys.path.append(repo_root)
+
+        import genesis as gs
+        gs.init(backend=gs.gpu, logging_level="warning")
+
+        from envs.FastTD3.dexmachina_wrapper import GenesisFastTD3Wrapper
+        from dexmachina.envs.constructors import get_all_env_cfg, build_env
+
+        # Parse the string (e.g., "dexmachina|allegro_hand|box-30-230")
+        parts = args.env_name.split("|")
+        hand_name = parts[1] if len(parts) > 1 else "allegro_hand"
+        clip_name = parts[2] if len(parts) > 2 else "box-30-230"
+
+        # Mock the args object that Dexmachina's builder expects
+        class DexArgs:
+            def __init__(self):
+                self.env = type("EnvArgs", (), {
+                    "hand": hand_name,
+                    "clip": clip_name,
+                    "retarget_name": "para"
+                })
+                self.num_train_envs = args.num_envs
+                self.num_eval_envs = 0
+                self.num_record_envs = 0
+
+        dex_args = DexArgs()
+
+        print(f"[INFO] Building Dexmachina env: {hand_name} / {clip_name}")
+        env_kwargs = get_all_env_cfg(dex_args, device=args.device)
+        base_env = build_env(env_kwargs)
+
+        # Wrap it for FastTD3
+        env = GenesisFastTD3Wrapper(base_env, rl_device=args.device)
     else:
         from environments.mujoco_playground_env import make_env
 
