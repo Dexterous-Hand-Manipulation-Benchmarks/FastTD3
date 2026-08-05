@@ -124,16 +124,30 @@ def main():
     elif args.env_name.startswith("dexmachina"):
         import sys
         import os
-        # Ensure Python can find your dexmachina and envs folders
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
-        if repo_root not in sys.path:
-            sys.path.append(repo_root)
 
+        # 1. Add specific package paths to avoid folder name confusion
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+        genesis_path = os.path.join(repo_root, 'genesis')
+        dexmachina_path = os.path.join(repo_root, 'dexmachina')
+
+        # Add root so it can find the 'envs' folder
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+
+        # Add specific paths so it finds the real 'genesis' and 'dexmachina' modules
+        if genesis_path not in sys.path:
+            sys.path.insert(0, genesis_path)
+        if dexmachina_path not in sys.path:
+            sys.path.insert(0, dexmachina_path)
+
+        # 2. Now initialize Genesis correctly
         import genesis as gs
         gs.init(backend=gs.gpu, logging_level="warning")
 
+        # 3. Import Dexmachina and Wrapper
         from envs.FastTD3.dexmachina_wrapper import GenesisFastTD3Wrapper
-        from dexmachina.envs.constructors import get_all_env_cfg, build_env
+        from dexmachina.envs.constructors import get_all_env_cfg
+        from dexmachina.envs import BaseEnv
 
         # Parse the string (e.g., "dexmachina|allegro_hand|box-30-230")
         parts = args.env_name.split("|")
@@ -143,23 +157,152 @@ def main():
         # Mock the args object that Dexmachina's builder expects
         class DexArgs:
             def __init__(self):
-                self.env = type("EnvArgs", (), {
-                    "hand": hand_name,
-                    "clip": clip_name,
-                    "retarget_name": "para"
-                })
-                self.num_train_envs = args.num_envs
-                self.num_eval_envs = 0
-                self.num_record_envs = 0
+                # Target / Overrides from FastTD3 launch script
+                self.num_envs = args.num_envs
+                self.clip = clip_name
+                self.hand = hand_name
+                self.retarget_name = "para"
+
+                # Standard Env / Simulation Args
+                self.vis = True
+                self.overlay = False
+                self.n_envs_per_row = None
+                self.texture_object = False
+                self.arctic_object = "box"
+                self.frame_start = 40
+                self.frame_end = 200
+                self.show_markers = False
+                self.interp = 1
+                self.seed = getattr(args, "seed", 42)
+                self.action_mode = "residual"
+                self.show_kpts = False
+                self.res_cap = False
+                self.hybrid_scales = [0.04, 0.5]
+                self.hide_hand = False
+                self.last_n_frame = -1
+                self.early_reset_threshold = 0.5
+                self.aux_reset_thres = [0, 0, 0]
+                self.record_video = True
+                self.render_camera = "front"
+                self.raytrace = False
+                self.record_interval = 500
+                self.use_teleop = False
+                self.teleop_fname = "data/scripted/tmp_box/tmp_box.npz"
+                self.observe_tip_dist = False
+                self.observe_contact_force = False
+                self.task_rew_betas = [10, 1, 5]
+                self.no_object = False
+                self.show_fps = False
+                self.color_object = None
+
+                # Reward Args
+                self.action_penalty = 0.0
+                self.imi_rew_weight = 1.0  # Kept at 1.0 for retargeting
+                self.imi_wrist_weight = 0.5
+                self.contact_rew_weight = 0.0
+                self.bc_rew_weight = 0.0
+                self.bc_beta = 500.0
+                self.contact_beta = 10.0
+                self.skip_wrist_frame_contact = False
+                self.nomask_zero_contact = False
+                self.contact_rew_function = "exp"
+                self.use_retarget_contact = False
+                self.retarget_worldfr = False
+
+                # Physics / Dynamics Args
+                self.kp = 200.0
+                self.kv = 20.0
+                self.force_range = 100.0
+                self.obj_stiffness = 0.0
+                self.obj_damping = 0.0
+                self.vis_contact = False
+                self.use_rl_games = True
+                self.is_eval = False
+                self.rand_init_ratio = 0.0
+                self.chunk_ep_length = -1
+                self.use_rand = False
+                self.rand_friction = False
+                self.rand_com = False
+                self.rand_mass = False
+                self.external_force = False
+                self.force_scale = 5.0
+                self.torque_scale = 0.0
+                self.convexify_object = False
+                self.actuate_object = False
+                self.objdex_baseline = False
+                self.multiply_all_rew = False
+                self.group_collisions = False
+
+                # Curriculum Args
+                self.interval = 500
+                self.first_ratio = 0.3
+                self.first_stop_iter = 7000
+                self.second_stop_iter = 16000
+                self.kp_init = 100.0
+                self.kv_init = 10.0
+                self.force_range_init = 50.0
+                self.max_epochs = 5000
+                self.num_zero_epoch = 1000
+                self.curr_schedule = "uniform"
+                self.fixed_mode = "uniform"
+                self.decay_rew = False
+                self.wait_epochs = 500
+                self.decrease_rew = False
+                self.curr_rew_thres = [0.5, 0, 0, 0]
+                self.deque_freq = 1
+                self.grad_threshold = 0.001
+                self.gain_mode = "all"
+                self.uniform_mode = "slow"
+                self.upper_ratios = [0.8, 0.95, 0.95]
+                self.lower_ratios = [0.7, 0.9, 0.9]
+                self.deque_len = 30
+                self.decay_solimp = False
+                self.solip_multiplier = 0.95
+                self.resample_every_epoch = -1
+                self.skip_grad = False
+                self.dialback_ep_len = 30
+                self.dialback_min_epochs = 500
+                self.dialback_ratios = [0.98, 1.0, 1.0]
+
+                # Maniptrans Args
+                self.maniptrans = False
+                self.friction_range = [4, 1]
+                self.eps_finger_range = [0.1, 0.05]
+                self.eps_object_Prange = [0.1, 0.03]
+                self.eps_object_Rrange = [1.57, 0.52]
+                self.maniptrans_mode = "fixed"
+                self.maniptrans_schedule = "exp"
 
         dex_args = DexArgs()
 
         print(f"[INFO] Building Dexmachina env: {hand_name} / {clip_name}")
-        env_kwargs = get_all_env_cfg(dex_args, device=args.device)
-        base_env = build_env(env_kwargs)
+
+        # FastTD3 uses device_rank instead of device
+        sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
+
+        env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
+        base_env = BaseEnv(**env_kwargs)
 
         # Wrap it for FastTD3
-        env = GenesisFastTD3Wrapper(base_env, rl_device=args.device)
+        envs = GenesisFastTD3Wrapper(base_env, rl_device=sim_device)
+        env_type = "dexmachina"
+
+        print(f"[INFO] Building Dexmachina EVALUATION env...")
+        # Cap the evaluation environments to 64 to prevent CUDA OOM errors
+        eval_num = min(getattr(args, "num_eval_envs", 32), 32)
+        dex_args.num_envs = eval_num
+
+        eval_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
+        eval_base_env = BaseEnv(**eval_env_kwargs)
+        eval_envs = GenesisFastTD3Wrapper(eval_base_env, rl_device=sim_device)
+
+        print(f"[INFO] Building Dexmachina RENDER env...")
+        dex_args.num_envs = 1  # We only need 1 environment to record a video!
+
+        render_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
+        render_base_env = BaseEnv(**render_env_kwargs)
+        render_env = GenesisFastTD3Wrapper(render_base_env, rl_device=sim_device)
+
     else:
         from environments.mujoco_playground_env import make_env
 
@@ -418,30 +561,53 @@ def main():
             raise NotImplementedError(
                 "We don't support rendering for IsaacLab and MTBench environments"
             )
+        elif env_type == "dexmachina":
+            # 1. Reset the environment and safely capture the initial observation (obs)
+            reset_out = render_env.reset()
+            obs = reset_out[0] if isinstance(reset_out, tuple) else reset_out
+            # 2. Grab the first RGB frame from the floating camera
+            base = getattr(render_env, "env", getattr(render_env, "base_env", render_env))
+            render_out = base._floating_camera.render()
+            frame = render_out[0] if isinstance(render_out, tuple) else render_out
+            renders = [frame]
         else:
             obs = render_env.reset()
             render_env.state.info["command"] = jnp.array([[1.0, 0.0, 0.0]])
             renders = [render_env.state]
+
+        # 3. Rollout loop
         for i in range(render_env.max_episode_steps):
             with torch.no_grad(), autocast(
-                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                    device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
             ):
+                # Now `obs` exists and can be normalized successfully!
                 obs = normalize_obs(obs, update=False)
                 actions = actor(obs)
+
             next_obs, _, done, _ = render_env.step(actions.float())
+
             if env_type == "mujoco_playground":
                 render_env.state.info["command"] = jnp.array([[1.0, 0.0, 0.0]])
+
             if i % 2 == 0:
                 if env_type == "humanoid_bench":
                     renders.append(render_env.render())
+                elif env_type == "dexmachina":
+                    # Capture subsequent frames during the rollout
+                    base = getattr(render_env, "env", getattr(render_env, "base_env", render_env))
+                    render_out = base._floating_camera.render()
+                    frame = render_out[0] if isinstance(render_out, tuple) else render_out
+                    renders.append(frame)
                 else:
                     renders.append(render_env.state)
+
             if done.any():
                 break
+            # Advance to the next observation
             obs = next_obs
-
         if env_type == "mujoco_playground":
             renders = render_env.render_trajectory(renders)
+
         return renders
 
     def update_main(data, logs_dict):
