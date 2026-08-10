@@ -14,7 +14,15 @@ import random
 import time
 import math
 
-import tqdm
+# Changed: Imported specific columns to customize the progress bar
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
+)
 import wandb
 import numpy as np
 
@@ -303,6 +311,15 @@ def main():
         render_base_env = BaseEnv(**render_env_kwargs)
         render_env = GenesisFastTD3Wrapper(render_base_env, rl_device=sim_device)
 
+        try:
+            final_reward_config = envs.env.reward_module.cfg
+            # Log it to WandB
+            wandb.config.update({"dex_rewards": final_reward_config}, allow_val_change=True)
+            print("[INFO] Successfully logged Dexmachina reward config to WandB.")
+
+        except AttributeError as e:
+            print(f"[WARNING] Could not find reward config to log: {e}")
+
     else:
         from environments.mujoco_playground_env import make_env
 
@@ -525,7 +542,7 @@ def main():
         # Run for a fixed number of steps
         for i in range(eval_envs.max_episode_steps):
             with torch.no_grad(), autocast(
-                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                    device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
             ):
                 obs = normalize_obs(obs, update=False)
                 actions = actor(obs)
@@ -612,7 +629,7 @@ def main():
 
     def update_main(data, logs_dict):
         with autocast(
-            device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
         ):
             observations = data["observations"]
             next_observations = data["next"]["observations"]
@@ -698,7 +715,7 @@ def main():
 
     def update_pol(data, logs_dict):
         with autocast(
-            device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
         ):
             critic_observations = (
                 data["critic_observations"]
@@ -778,7 +795,18 @@ def main():
         global_step = 0
 
     dones = None
-    pbar = tqdm.tqdm(total=args.total_timesteps, initial=global_step)
+
+    # Changed: Added explicit columns to `Progress` to mimic tqdm (including MofNCompleteColumn for X/Y steps)
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    )
+    progress.start()
+    pbar = progress.add_task("", total=args.total_timesteps, completed=global_step)
+
     start_time = None
     desc = ""
 
@@ -786,14 +814,14 @@ def main():
         mark_step()
         logs_dict = TensorDict()
         if (
-            start_time is None
-            and global_step >= args.measure_burnin + args.learning_starts
+                start_time is None
+                and global_step >= args.measure_burnin + args.learning_starts
         ):
             start_time = time.time()
             measure_burnin = global_step
 
         with torch.no_grad(), autocast(
-            device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
+                device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
         ):
             norm_obs = normalize_obs(obs)
             actions = policy(obs=norm_obs, dones=dones)
@@ -803,7 +831,7 @@ def main():
 
         if args.reward_normalization:
             if env_type == "mtbench":
-                task_ids_one_hot = obs[..., -envs.num_tasks :]
+                task_ids_one_hot = obs[..., -envs.num_tasks:]
                 task_indices = torch.argmax(task_ids_one_hot, dim=1)
                 update_stats(rewards, dones.float(), task_ids=task_indices)
             else:
@@ -864,7 +892,7 @@ def main():
                 raw_rewards = data["next"]["rewards"]
                 if env_type in ["mtbench"] and args.reward_normalization:
                     # Multi-task reward normalization
-                    task_ids_one_hot = data["observations"][..., -envs.num_tasks :]
+                    task_ids_one_hot = data["observations"][..., -envs.num_tasks:]
                     task_indices = torch.argmax(task_ids_one_hot, dim=1)
                     data["next"]["rewards"] = normalize_reward(
                         raw_rewards, task_ids=task_indices
@@ -884,7 +912,7 @@ def main():
 
             if global_step % 100 == 0 and start_time is not None:
                 speed = (global_step - measure_burnin) / (time.time() - start_time)
-                pbar.set_description(f"{speed: 4.4f} sps, " + desc)
+                progress.update(pbar, description=f"[cyan]{speed: 4.4f} sps, " + desc)
                 with torch.no_grad():
                     logs = {
                         "actor_loss": logs_dict["actor_loss"].mean(),
@@ -907,8 +935,8 @@ def main():
                         logs["eval_avg_length"] = eval_avg_length
 
                     if (
-                        args.render_interval > 0
-                        and global_step % args.render_interval == 0
+                            args.render_interval > 0
+                            and global_step % args.render_interval == 0
                     ):
                         renders = render_with_rollout()
                         render_video = wandb.Video(
@@ -932,9 +960,9 @@ def main():
                     )
 
             if (
-                args.save_interval > 0
-                and global_step > 0
-                and global_step % args.save_interval == 0
+                    args.save_interval > 0
+                    and global_step > 0
+                    and global_step % args.save_interval == 0
             ):
                 print(f"Saving model at global step {global_step}")
                 save_params(
@@ -951,7 +979,9 @@ def main():
         global_step += 1
         actor_scheduler.step()
         q_scheduler.step()
-        pbar.update(1)
+        progress.update(pbar, advance=1)
+
+    progress.stop()
 
     save_params(
         global_step,
