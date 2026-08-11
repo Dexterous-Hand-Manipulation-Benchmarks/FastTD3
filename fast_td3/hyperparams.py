@@ -549,13 +549,13 @@ class DexMachinaArgs(BaseArgs):
     frame_end: int = 200
     show_markers: bool = False
     interp: int = 1
-    action_mode: str = "residual"
+    action_mode: str = "hybrid"
     show_kpts: bool = False
     res_cap: bool = False
-    hybrid_scales: tuple = (0.04, 0.5)
+    hybrid_scales: tuple = (0.1, 1.0)
     hide_hand: bool = False
     last_n_frame: int = -1
-    early_reset_threshold: float = 0.5
+    early_reset_threshold: float = 0.6
     aux_reset_thres: tuple = (0.0, 0.0, 0.0)
     record_video: bool = True
     render_camera: str = "front"
@@ -563,25 +563,25 @@ class DexMachinaArgs(BaseArgs):
     record_interval: int = 500
     use_teleop: bool = False
     teleop_fname: str = "data/scripted/tmp_box/tmp_box.npz"
-    observe_tip_dist: bool = False
-    observe_contact_force: bool = False
+    observe_tip_dist: bool = True
+    observe_contact_force: bool = True
     task_rew_betas: tuple = (10.0, 1.0, 5.0)
     no_object: bool = False
     show_fps: bool = False
     color_object: str = ""
 
     # Reward Args
-    action_penalty: float = 0.0
-    imi_rew_weight: float = 1.0  
+    action_penalty: float = 0.01
+    imi_rew_weight: float = 0.3
     imi_wrist_weight: float = 0.5
-    contact_rew_weight: float = 0.0
-    bc_rew_weight: float = 0.0
+    contact_rew_weight: float = 3.0
+    bc_rew_weight: float = 0.3
     bc_beta: float = 500.0
     contact_beta: float = 10.0
     skip_wrist_frame_contact: bool = False
     nomask_zero_contact: bool = False
     contact_rew_function: str = "exp"
-    use_retarget_contact: bool = False
+    use_retarget_contact: bool = True
     retarget_worldfr: bool = False
 
     # Physics / Dynamics Args
@@ -603,39 +603,39 @@ class DexMachinaArgs(BaseArgs):
     force_scale: float = 5.0
     torque_scale: float = 0.0
     convexify_object: bool = False
-    actuate_object: bool = False
+    actuate_object: bool = True
     objdex_baseline: bool = False
     multiply_all_rew: bool = False
-    group_collisions: bool = False
+    group_collisions: bool = True
 
     # Curriculum Args
     interval: int = 500
     first_ratio: float = 0.3
     first_stop_iter: int = 7000
     second_stop_iter: int = 16000
-    kp_init: float = 100.0
-    kv_init: float = 10.0
+    kp_init: float = 80.0
+    kv_init: float = 5.0
     force_range_init: float = 50.0
     max_epochs: int = 5000
     num_zero_epoch: int = 1000
     curr_schedule: str = "uniform"
     fixed_mode: str = "uniform"
     decay_rew: bool = False
-    wait_epochs: int = 500
+    wait_epochs: int = 100
     decrease_rew: bool = False
-    curr_rew_thres: tuple = (0.5, 0.0, 0.0, 0.0)
+    curr_rew_thres: tuple = (0.6, 0.01, 0.01, 0.01)
     deque_freq: int = 1
     grad_threshold: float = 0.001
     gain_mode: str = "all"
     uniform_mode: str = "slow"
-    upper_ratios: tuple = (0.8, 0.95, 0.95)
-    lower_ratios: tuple = (0.7, 0.9, 0.9)
+    upper_ratios: tuple = (0.9, 0.9, 1.0)
+    lower_ratios: tuple = (0.8, 0.8, 1.0)
     deque_len: int = 30
     decay_solimp: bool = False
     solip_multiplier: float = 0.95
     resample_every_epoch: int = -1
-    skip_grad: bool = False
-    dialback_ep_len: int = 30
+    skip_grad: bool = True
+    dialback_ep_len: int = 80
     dialback_min_epochs: int = 500
     dialback_ratios: tuple = (0.98, 1.0, 1.0)
 
