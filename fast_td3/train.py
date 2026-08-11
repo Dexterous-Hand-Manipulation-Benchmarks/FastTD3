@@ -190,6 +190,7 @@ def main():
         env_type = "dexmachina"
 
         print(f"[INFO] Building Dexmachina EVALUATION env...")
+        original_num_envs = args.num_envs
         # Cap the evaluation environments to 64 to prevent CUDA OOM errors
         eval_num = min(getattr(args, "num_eval_envs", 32), 32)
         dex_args.num_envs = eval_num
@@ -204,6 +205,8 @@ def main():
         render_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
         render_base_env = BaseEnv(**render_env_kwargs)
         render_env = GenesisFastTD3Wrapper(render_base_env, rl_device=sim_device)
+        
+        args.num_envs = original_num_envs
 
         try:
             final_reward_config = envs.env.reward_module.cfg
