@@ -162,126 +162,20 @@ def main():
         hand_name = parts[1] if len(parts) > 1 else "allegro_hand"
         clip_name = parts[2] if len(parts) > 2 else "box-30-230"
 
-        # Mock the args object that Dexmachina's builder expects
-        class DexArgs:
-            def __init__(self):
-                # Target / Overrides from FastTD3 launch script
-                self.num_envs = args.num_envs
-                self.clip = clip_name
-                self.hand = hand_name
-                self.retarget_name = "para"
+        # FastTD3 uses device_rank instead of device
+        sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
 
-                # Standard Env / Simulation Args
-                self.vis = True
-                self.overlay = False
-                self.n_envs_per_row = None
-                self.texture_object = False
-                self.arctic_object = "box"
-                self.frame_start = 40
-                self.frame_end = 200
-                self.show_markers = False
-                self.interp = 1
-                self.seed = getattr(args, "seed", 42)
-                self.action_mode = "residual"
-                self.show_kpts = False
-                self.res_cap = False
-                self.hybrid_scales = [0.04, 0.5]
-                self.hide_hand = False
-                self.last_n_frame = -1
-                self.early_reset_threshold = 0.5
-                self.aux_reset_thres = [0, 0, 0]
-                self.record_video = True
-                self.render_camera = "front"
-                self.raytrace = False
-                self.record_interval = 500
-                self.use_teleop = False
-                self.teleop_fname = "data/scripted/tmp_box/tmp_box.npz"
-                self.observe_tip_dist = False
-                self.observe_contact_force = False
-                self.task_rew_betas = [10, 1, 5]
-                self.no_object = False
-                self.show_fps = False
-                self.color_object = None
+        # Set values from env_name
+        args.hand = hand_name
+        args.clip = clip_name
 
-                # Reward Args
-                self.action_penalty = 0.0
-                self.imi_rew_weight = 1.0  # Kept at 1.0 for retargeting
-                self.imi_wrist_weight = 0.5
-                self.contact_rew_weight = 0.0
-                self.bc_rew_weight = 0.0
-                self.bc_beta = 500.0
-                self.contact_beta = 10.0
-                self.skip_wrist_frame_contact = False
-                self.nomask_zero_contact = False
-                self.contact_rew_function = "exp"
-                self.use_retarget_contact = False
-                self.retarget_worldfr = False
+        # Handle 'None' defaults that tyro doesn't parse cleanly
+        if args.n_envs_per_row == 0:
+            args.n_envs_per_row = None
+        if args.color_object == "":
+            args.color_object = None
 
-                # Physics / Dynamics Args
-                self.kp = 200.0
-                self.kv = 20.0
-                self.force_range = 100.0
-                self.obj_stiffness = 0.0
-                self.obj_damping = 0.0
-                self.vis_contact = False
-                self.use_rl_games = True
-                self.is_eval = False
-                self.rand_init_ratio = 0.0
-                self.chunk_ep_length = -1
-                self.use_rand = False
-                self.rand_friction = False
-                self.rand_com = False
-                self.rand_mass = False
-                self.external_force = False
-                self.force_scale = 5.0
-                self.torque_scale = 0.0
-                self.convexify_object = False
-                self.actuate_object = False
-                self.objdex_baseline = False
-                self.multiply_all_rew = False
-                self.group_collisions = False
-
-                # Curriculum Args
-                self.interval = 500
-                self.first_ratio = 0.3
-                self.first_stop_iter = 7000
-                self.second_stop_iter = 16000
-                self.kp_init = 100.0
-                self.kv_init = 10.0
-                self.force_range_init = 50.0
-                self.max_epochs = 5000
-                self.num_zero_epoch = 1000
-                self.curr_schedule = "uniform"
-                self.fixed_mode = "uniform"
-                self.decay_rew = False
-                self.wait_epochs = 500
-                self.decrease_rew = False
-                self.curr_rew_thres = [0.5, 0, 0, 0]
-                self.deque_freq = 1
-                self.grad_threshold = 0.001
-                self.gain_mode = "all"
-                self.uniform_mode = "slow"
-                self.upper_ratios = [0.8, 0.95, 0.95]
-                self.lower_ratios = [0.7, 0.9, 0.9]
-                self.deque_len = 30
-                self.decay_solimp = False
-                self.solip_multiplier = 0.95
-                self.resample_every_epoch = -1
-                self.skip_grad = False
-                self.dialback_ep_len = 30
-                self.dialback_min_epochs = 500
-                self.dialback_ratios = [0.98, 1.0, 1.0]
-
-                # Maniptrans Args
-                self.maniptrans = False
-                self.friction_range = [4, 1]
-                self.eps_finger_range = [0.1, 0.05]
-                self.eps_object_Prange = [0.1, 0.03]
-                self.eps_object_Rrange = [1.57, 0.52]
-                self.maniptrans_mode = "fixed"
-                self.maniptrans_schedule = "exp"
-
-        dex_args = DexArgs()
+        dex_args = args
 
         print(f"[INFO] Building Dexmachina env: {hand_name} / {clip_name}")
 

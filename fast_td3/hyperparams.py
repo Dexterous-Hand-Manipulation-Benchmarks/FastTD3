@@ -203,6 +203,9 @@ def get_args():
     elif base_args.env_name.startswith("MTBench-"):
         # MTBench
         specific_args = tyro.cli(MTBenchArgs)
+    elif base_args.env_name.startswith("dexmachina"):
+        # DexMachina
+        specific_args = tyro.cli(DexMachinaArgs)
     else:
         # MuJoCo Playground
         specific_args = tyro.cli(MuJoCoPlaygroundArgs)
@@ -527,3 +530,121 @@ class IsaacReposeCubeShadowDirectArgs(IsaacLabArgs):
     total_timesteps: int = 100000
     v_min: float = -500.0
     v_max: float = 500.0
+
+
+@dataclass
+class DexMachinaArgs(BaseArgs):
+    # Target / Overrides from FastTD3 launch script
+    clip: str = "box-30-230"
+    hand: str = "allegro_hand"
+    retarget_name: str = "para"
+
+    # Standard Env / Simulation Args
+    vis: bool = True
+    overlay: bool = False
+    n_envs_per_row: int = 0  # 0 means None
+    texture_object: bool = False
+    arctic_object: str = "box"
+    frame_start: int = 40
+    frame_end: int = 200
+    show_markers: bool = False
+    interp: int = 1
+    action_mode: str = "residual"
+    show_kpts: bool = False
+    res_cap: bool = False
+    hybrid_scales: tuple = (0.04, 0.5)
+    hide_hand: bool = False
+    last_n_frame: int = -1
+    early_reset_threshold: float = 0.5
+    aux_reset_thres: tuple = (0.0, 0.0, 0.0)
+    record_video: bool = True
+    render_camera: str = "front"
+    raytrace: bool = False
+    record_interval: int = 500
+    use_teleop: bool = False
+    teleop_fname: str = "data/scripted/tmp_box/tmp_box.npz"
+    observe_tip_dist: bool = False
+    observe_contact_force: bool = False
+    task_rew_betas: tuple = (10.0, 1.0, 5.0)
+    no_object: bool = False
+    show_fps: bool = False
+    color_object: str = ""
+
+    # Reward Args
+    action_penalty: float = 0.0
+    imi_rew_weight: float = 1.0  
+    imi_wrist_weight: float = 0.5
+    contact_rew_weight: float = 0.0
+    bc_rew_weight: float = 0.0
+    bc_beta: float = 500.0
+    contact_beta: float = 10.0
+    skip_wrist_frame_contact: bool = False
+    nomask_zero_contact: bool = False
+    contact_rew_function: str = "exp"
+    use_retarget_contact: bool = False
+    retarget_worldfr: bool = False
+
+    # Physics / Dynamics Args
+    kp: float = 200.0
+    kv: float = 20.0
+    force_range: float = 100.0
+    obj_stiffness: float = 0.0
+    obj_damping: float = 0.0
+    vis_contact: bool = False
+    use_rl_games: bool = True
+    is_eval: bool = False
+    rand_init_ratio: float = 0.0
+    chunk_ep_length: int = -1
+    use_rand: bool = False
+    rand_friction: bool = False
+    rand_com: bool = False
+    rand_mass: bool = False
+    external_force: bool = False
+    force_scale: float = 5.0
+    torque_scale: float = 0.0
+    convexify_object: bool = False
+    actuate_object: bool = False
+    objdex_baseline: bool = False
+    multiply_all_rew: bool = False
+    group_collisions: bool = False
+
+    # Curriculum Args
+    interval: int = 500
+    first_ratio: float = 0.3
+    first_stop_iter: int = 7000
+    second_stop_iter: int = 16000
+    kp_init: float = 100.0
+    kv_init: float = 10.0
+    force_range_init: float = 50.0
+    max_epochs: int = 5000
+    num_zero_epoch: int = 1000
+    curr_schedule: str = "uniform"
+    fixed_mode: str = "uniform"
+    decay_rew: bool = False
+    wait_epochs: int = 500
+    decrease_rew: bool = False
+    curr_rew_thres: tuple = (0.5, 0.0, 0.0, 0.0)
+    deque_freq: int = 1
+    grad_threshold: float = 0.001
+    gain_mode: str = "all"
+    uniform_mode: str = "slow"
+    upper_ratios: tuple = (0.8, 0.95, 0.95)
+    lower_ratios: tuple = (0.7, 0.9, 0.9)
+    deque_len: int = 30
+    decay_solimp: bool = False
+    solip_multiplier: float = 0.95
+    resample_every_epoch: int = -1
+    skip_grad: bool = False
+    dialback_ep_len: int = 30
+    dialback_min_epochs: int = 500
+    dialback_ratios: tuple = (0.98, 1.0, 1.0)
+
+    # Maniptrans Args
+    maniptrans: bool = False
+    friction_range: tuple = (4.0, 1.0)
+    eps_finger_range: tuple = (0.1, 0.05)
+    eps_object_Prange: tuple = (0.1, 0.03)
+    eps_object_Rrange: tuple = (1.57, 0.52)
+    maniptrans_mode: str = "fixed"
+    maniptrans_schedule: str = "exp"
+
