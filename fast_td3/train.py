@@ -706,8 +706,16 @@ def main():
 
     start_time = None
     desc = ""
+    current_epoch = -1
 
     while global_step < args.total_timesteps:
+        if hasattr(envs, "env") and hasattr(envs.env, "set_curriculum"):
+            max_epochs = getattr(args, "max_epochs", 5000)
+            epoch = (global_step * max_epochs) // args.total_timesteps
+            if epoch > current_epoch:
+                envs.env.set_curriculum(epoch)
+                current_epoch = epoch
+
         mark_step()
         logs_dict = TensorDict()
         if (
