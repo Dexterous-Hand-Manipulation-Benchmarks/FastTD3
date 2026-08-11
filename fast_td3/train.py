@@ -707,6 +707,7 @@ def main():
     start_time = None
     desc = ""
     current_epoch = -1
+    latest_episode_info = {}
 
     while global_step < args.total_timesteps:
         if hasattr(envs, "env") and hasattr(envs.env, "set_curriculum"):
@@ -714,6 +715,10 @@ def main():
             epoch = (global_step * max_epochs) // args.total_timesteps
             if epoch > current_epoch:
                 envs.env.set_curriculum(epoch)
+                if hasattr(eval_envs, "env") and hasattr(eval_envs.env, "set_curriculum"):
+                    eval_envs.env.set_curriculum(epoch)
+                if hasattr(render_env, "env") and hasattr(render_env.env, "set_curriculum"):
+                    render_env.env.set_curriculum(epoch)
                 current_epoch = epoch
 
         mark_step()
@@ -733,6 +738,9 @@ def main():
 
         next_obs, rewards, dones, infos = envs.step(actions.float())
         truncations = infos["time_outs"]
+        
+        if "episode_info" in infos:
+            latest_episode_info = infos["episode_info"]
 
         if args.reward_normalization:
             if env_type == "mtbench":
@@ -829,6 +837,10 @@ def main():
                         "env_rewards": rewards.mean(),
                         "buffer_rewards": raw_rewards.mean(),
                     }
+
+                    for k, v in latest_episode_info.items():
+                        if isinstance(v, (int, float)):
+                            logs[f"env/{k}"] = v
 
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
