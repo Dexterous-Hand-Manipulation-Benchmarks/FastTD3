@@ -842,11 +842,10 @@ def main():
                         if isinstance(v, (int, float)):
                             logs[f"env/{k}"] = v
                         elif hasattr(v, "item"):
-                            try:
-                                logs[f"env/{k}"] = v.item()
-                            except ValueError:
-                                # If it's a tensor with multiple elements (like episode_rew for multiple envs)
+                            if hasattr(v, "numel") and v.numel() > 1:
                                 logs[f"env/{k}"] = v.float().mean().item()
+                            else:
+                                logs[f"env/{k}"] = v.item()
 
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
