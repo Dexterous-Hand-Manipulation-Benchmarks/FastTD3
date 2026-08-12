@@ -155,9 +155,26 @@ def main():
     print(f"Saved FastTD3 eval data to {out_file}")
     
     if args.record_video:
-        video_fname = os.path.join(out_dir, "video.mp4")
-        uenv.export_video(video_fname, wait_for_max=False)
-        print(f"Saved video to {video_fname}")
+        frames = uenv.get_recorded_frames(wait_for_max=False)
+        if frames is not None and len(frames) > 0:
+            print(f"DEBUG: Recorded {len(frames)} frames.")
+            print(f"DEBUG: First frame shape: {frames[0].shape}, max_val: {np.max(frames[0])}, min_val: {np.min(frames[0])}")
+            
+            # Save the very first frame as an image to debug what the camera sees!
+            from PIL import Image
+            img_frame = frames[0][:,:,:3]
+            if img_frame.dtype != np.uint8:
+                img_frame = (np.clip(img_frame, 0, 1) * 255).astype(np.uint8)
+            Image.fromarray(img_frame).save(os.path.join(out_dir, "debug_frame0.png"))
+            
+            # Write video
+            from moviepy.editor import ImageSequenceClip
+            video_fname = os.path.join(out_dir, "video.mp4")
+            clip = ImageSequenceClip([f[:,:,:3] for f in frames], fps=int(1/uenv.dt/2))
+            clip.write_videofile(video_fname)
+            print(f"Saved video to {video_fname}")
+        else:
+            print("DEBUG: No frames were recorded by the environment!")
 
 if __name__ == '__main__':
     main()
