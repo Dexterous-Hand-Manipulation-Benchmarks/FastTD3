@@ -52,6 +52,7 @@ def main():
     if args.record_video:
         env_kwargs['env_cfg']['scene_kwargs']['use_visualizer'] = True  
         env_kwargs['env_cfg']['record_video'] = True 
+        env_kwargs['env_cfg']['render_segmentation'] = True # Required for export_video to fill background with white
         print("Setting render resolution to 512") 
         if 'camera_kwargs' not in env_kwargs['env_cfg']:
             env_kwargs['env_cfg']['camera_kwargs'] = {}
@@ -59,7 +60,7 @@ def main():
             res=(512, 512),
             fov=40,
             pos=(0.5, -1.5, 1.2),
-            lookat=(0.0, -1.58, 2.0),
+            lookat=(0.0, -0.08, 0.90),
         ) 
     
     for name, cfg in env_kwargs['object_cfgs'].items():
