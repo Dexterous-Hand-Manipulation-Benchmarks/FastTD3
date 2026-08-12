@@ -61,6 +61,7 @@ except ImportError:
 def main():
     args = get_args()
     print(args)
+    timestamp = time.strftime("%Y%m%d")
     run_name = f"{args.env_name}__{args.exp_name}__{args.seed}"
 
     amp_enabled = args.amp and args.cuda and torch.cuda.is_available()
@@ -895,7 +896,7 @@ def main():
                     obs_normalizer,
                     critic_obs_normalizer,
                     args,
-                    f"models/{run_name}_{global_step}.pt",
+                    f"models/{timestamp}-{args.env_name}/{run_name}_{global_step}.pt",
                 )
 
         global_step += 1
@@ -913,7 +914,7 @@ def main():
         obs_normalizer,
         critic_obs_normalizer,
         args,
-        f"models/{run_name}_final.pt",
+        f"models/{timestamp}-{args.env_name}/{run_name}_final.pt",
     )
 
 
