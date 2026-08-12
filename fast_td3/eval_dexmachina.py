@@ -154,11 +154,8 @@ def main():
     print(f"Saved FastTD3 eval data to {out_file}")
     
     if args.record_video:
-        frames = uenv.get_recorded_frames()
-        from moviepy.editor import ImageSequenceClip
-        video_fname = os.path.join(out_dir, f"video.mp4")
-        clip = ImageSequenceClip(frames, fps=int(1/uenv.dt/2))
-        clip.write_videofile(video_fname)
+        video_fname = os.path.join(out_dir, "video.mp4")
+        uenv.export_video(video_fname, wait_for_max=False)
         print(f"Saved video to {video_fname}")
 
 if __name__ == '__main__':
