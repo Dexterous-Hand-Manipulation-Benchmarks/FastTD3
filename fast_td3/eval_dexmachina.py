@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--checkpoint', '-ck', type=str, required=True, help='Path to FastTD3 .pt checkpoint')
     parser.add_argument('--num_envs', '-ne', type=int, default=20)
     parser.add_argument('--env_name', type=str, default="dexmachina|allegro_hand|box-30-230")
+    parser.add_argument('--record_video', action='store_true', help='Record a video of the evaluation')
     args = parser.parse_args()
 
     # Load checkpoint
@@ -48,6 +49,19 @@ def main():
     env_kwargs['env_cfg']['is_eval'] = True
     env_kwargs['rand_cfg']['randomize'] = False
     
+    if args.record_video:
+        env_kwargs['env_cfg']['scene_kwargs']['use_visualizer'] = True  
+        env_kwargs['env_cfg']['record_video'] = True 
+        print("Setting render resolution to 512") 
+        if 'camera_kwargs' not in env_kwargs['env_cfg']:
+            env_kwargs['env_cfg']['camera_kwargs'] = {}
+        env_kwargs['env_cfg']['camera_kwargs']['front'] = dict(
+            res=(512, 512),
+            fov=40,
+            pos=(0.5, -1.5, 1.2),
+            lookat=(0.0, -1.58, 2.0),
+        ) 
+    
     for name, cfg in env_kwargs['object_cfgs'].items():
         cfg['actuated'] = False
         
@@ -65,10 +79,24 @@ def main():
     n_obs = env.num_obs if type(env.num_obs) == int else env.num_obs[0]
     
     # Initialize models
-    actor = Actor(n_obs=n_obs, n_act=n_act, num_envs=args.num_envs, device=device).to(device)
+    actor = Actor(
+        n_obs=n_obs,
+        n_act=n_act,
+        num_envs=args.num_envs,
+        device=device,
+        init_scale=dex_args.init_scale,
+        hidden_dim=dex_args.actor_hidden_dim,
+        std_min=dex_args.std_min,
+        std_max=dex_args.std_max
+    ).to(device)
     obs_normalizer = EmpiricalNormalization(shape=n_obs, device=device)
     
-    actor.load_state_dict(checkpoint["actor_state_dict"])
+    # strict=False does NOT ignore shape mismatches for existing keys! 
+    # We must manually delete noise_scales from the state dict before loading.
+    actor_state_dict = checkpoint["actor_state_dict"].copy()
+    if "noise_scales" in actor_state_dict:
+        del actor_state_dict["noise_scales"]
+    actor.load_state_dict(actor_state_dict, strict=False)
     if "obs_normalizer_state" in checkpoint:
         obs_normalizer.load_state_dict(checkpoint["obs_normalizer_state"])
         
@@ -84,6 +112,10 @@ def main():
     obj = uenv.objects[uenv.object_names[0]]
     if obj.actuated:
         obj.set_joint_gains(0.0, 0.0, force_range=0.0)
+        
+    if args.record_video:
+        uenv.start_recording()
+        uenv.max_video_frames = int(uenv.max_episode_length)
         
     eval_data = defaultdict(list)
     
@@ -120,6 +152,14 @@ def main():
     
     np.save(out_file, eval_data)
     print(f"Saved FastTD3 eval data to {out_file}")
+    
+    if args.record_video:
+        frames = uenv.get_recorded_frames()
+        from moviepy.editor import ImageSequenceClip
+        video_fname = os.path.join(out_dir, f"video.mp4")
+        clip = ImageSequenceClip(frames, fps=int(1/uenv.dt/2))
+        clip.write_videofile(video_fname)
+        print(f"Saved video to {video_fname}")
 
 if __name__ == '__main__':
     main()
