@@ -9,7 +9,7 @@ from collections import defaultdict
 from fast_td3.hyperparams import DexMachinaArgs
 from fast_td3.fast_td3 import Actor
 from fast_td3.fast_td3_utils import EmpiricalNormalization
-from envs.FastTD3.dexmachina_wrapper import GenesisFastTD3Wrapper
+from dexmachina_wrapper import GenesisFastTD3Wrapper
 from dexmachina.envs.constructors import get_all_env_cfg
 from dexmachina.envs.base_env import BaseEnv
 
