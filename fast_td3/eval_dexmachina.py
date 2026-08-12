@@ -52,16 +52,15 @@ def main():
     if args.record_video:
         env_kwargs['env_cfg']['scene_kwargs']['use_visualizer'] = True  
         env_kwargs['env_cfg']['record_video'] = True 
-        env_kwargs['env_cfg']['render_segmentation'] = True # Required for export_video to fill background with white
-        print("Setting render resolution to 512") 
+        env_kwargs['env_cfg']['render_segmentation'] = False 
         if 'camera_kwargs' not in env_kwargs['env_cfg']:
             env_kwargs['env_cfg']['camera_kwargs'] = {}
         env_kwargs['env_cfg']['camera_kwargs']['front'] = dict(
             res=(512, 512),
             fov=40,
-            pos=(0.5, -1.5, 1.2),
-            lookat=(0.0, -0.08, 0.90),
-        ) 
+            pos=(0.0, -1.0, 1.2),
+            lookat=(0.0, 0.0, 0.7),
+        )
     
     for name, cfg in env_kwargs['object_cfgs'].items():
         cfg['actuated'] = False
@@ -114,9 +113,13 @@ def main():
     if obj.actuated:
         obj.set_joint_gains(0.0, 0.0, force_range=0.0)
         
+    renders = []
     if args.record_video:
-        uenv.start_recording()
-        uenv.max_video_frames = int(uenv.max_episode_length)
+        render_out = uenv._floating_camera.render()
+        frame = render_out[0] if isinstance(render_out, tuple) else render_out
+        if isinstance(frame, torch.Tensor):
+            frame = frame.cpu().numpy()
+        renders.append(frame)
         
     eval_data = defaultdict(list)
     
@@ -142,6 +145,13 @@ def main():
             for key in ['pos_dist', 'rot_dist', 'arti_dist']:
                 if key in rew_dict:
                     eval_data[key].append(rew_dict[key].cpu().numpy())
+            
+            if args.record_video and i % 2 == 0:
+                render_out = uenv._floating_camera.render()
+                frame = render_out[0] if isinstance(render_out, tuple) else render_out
+                if isinstance(frame, torch.Tensor):
+                    frame = frame.cpu().numpy()
+                renders.append(frame)
                     
     eval_data = {k: np.stack(v) for k, v in eval_data.items()}
     
@@ -154,27 +164,23 @@ def main():
     np.save(out_file, eval_data)
     print(f"Saved FastTD3 eval data to {out_file}")
     
-    if args.record_video:
-        frames = uenv.get_recorded_frames(wait_for_max=False)
-        if frames is not None and len(frames) > 0:
-            print(f"DEBUG: Recorded {len(frames)} frames.")
-            print(f"DEBUG: First frame shape: {frames[0].shape}, max_val: {np.max(frames[0])}, min_val: {np.min(frames[0])}")
+    if args.record_video and len(renders) > 0:
+        from moviepy.editor import ImageSequenceClip
+        video_fname = os.path.join(out_dir, "video.mp4")
+        
+        # Ensure RGB
+        clean_renders = []
+        for r in renders:
+            img = r[:,:,:3] if r.shape[-1] == 4 else r
+            if img.dtype != np.uint8:
+                if img.max() <= 1.0:
+                    img = (img * 255)
+                img = img.astype(np.uint8)
+            clean_renders.append(img)
             
-            # Save the very first frame as an image to debug what the camera sees!
-            from PIL import Image
-            img_frame = frames[0][:,:,:3]
-            if img_frame.dtype != np.uint8:
-                img_frame = (np.clip(img_frame, 0, 1) * 255).astype(np.uint8)
-            Image.fromarray(img_frame).save(os.path.join(out_dir, "debug_frame0.png"))
-            
-            # Write video
-            from moviepy.editor import ImageSequenceClip
-            video_fname = os.path.join(out_dir, "video.mp4")
-            clip = ImageSequenceClip([f[:,:,:3] for f in frames], fps=int(1/uenv.dt/2))
-            clip.write_videofile(video_fname)
-            print(f"Saved video to {video_fname}")
-        else:
-            print("DEBUG: No frames were recorded by the environment!")
+        clip = ImageSequenceClip(clean_renders, fps=30)
+        clip.write_videofile(video_fname)
+        print(f"Saved video to {video_fname}")
 
 if __name__ == '__main__':
     main()
