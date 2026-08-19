@@ -102,6 +102,10 @@ def main():
     parts = dex_args.env_name.split("|")
     dex_args.hand = parts[1] if len(parts) > 1 else "allegro_hand"
     dex_args.clip = parts[2] if len(parts) > 2 else "box-30-230"
+    if hasattr(dex_args, "n_envs_per_row") and dex_args.n_envs_per_row == 0:
+        dex_args.n_envs_per_row = None
+    if hasattr(dex_args, "color_object") and dex_args.color_object == "":
+        dex_args.color_object = None
     
     gs.init(backend=gs.gpu, logging_level='warning')
     env_kwargs = get_all_env_cfg(dex_args, device=str(device))
