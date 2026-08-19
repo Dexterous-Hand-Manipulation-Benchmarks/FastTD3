@@ -1,10 +1,19 @@
 import os
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../FastTD3')))
+import argparse
+from collections import defaultdict
+import yaml
 import numpy as np
 import torch
 import genesis as gs
-from collections import defaultdict
+
+# Ensure FastTD3 and dexmachina packages can be imported
+base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+fast_td3_dir = os.path.join(base_dir, "FastTD3")
+dexmachina_dir = os.path.join(base_dir, "dexmachina")
+for p in [base_dir, fast_td3_dir, dexmachina_dir, os.path.dirname(__file__)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from fast_td3.hyperparams import DexMachinaArgs
 from fast_td3.fast_td3 import Actor
@@ -13,6 +22,7 @@ from dexmachina_wrapper import GenesisFastTD3Wrapper
 from dexmachina.envs.constructors import get_all_env_cfg
 from dexmachina.envs.base_env import BaseEnv
 
+
 def gather_object_state_tensor(demo_data):
     obj_pos = demo_data["obj_pos"]
     obj_quat = demo_data["obj_quat"]
@@ -20,23 +30,75 @@ def gather_object_state_tensor(demo_data):
     if len(obj_arti.shape) == 1:
         obj_arti = obj_arti[:, None]
     arr = np.concatenate([obj_pos, obj_quat, obj_arti], axis=1)
-    return torch.tensor(arr).float()
+    return torch.tensor(arr, dtype=torch.float32)
+
+
+def sanitize_frame(frame):
+    """
+    Ensures a frame is a 3D numpy array (H, W, 3) of dtype uint8 in range [0, 255].
+    Handles PyTorch tensors, leading batch dims, alpha/seg channels, and float ranges.
+    """
+    if frame is None:
+        return None
+    if isinstance(frame, torch.Tensor):
+        frame = frame.detach().cpu().numpy()
+    if not isinstance(frame, np.ndarray):
+        return None
+
+    # Squeeze leading singleton/batch dimensions: e.g. (1, H, W, C) -> (H, W, C)
+    while frame.ndim > 3 and frame.shape[0] == 1:
+        frame = frame[0]
+
+    # Handle grayscale / 2D
+    if frame.ndim == 2:
+        frame = np.stack([frame] * 3, axis=-1)
+
+    # Drop alpha channel if 4-channel RGBA or RGB+seg
+    if frame.ndim == 3 and frame.shape[-1] == 4:
+        frame = frame[..., :3]
+
+    # Convert floats in [0, 1] to uint8 [0, 255]
+    if frame.dtype != np.uint8:
+        if frame.max() <= 1.01 and frame.max() > 0:
+            frame = frame * 255.0
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+
+    # Validate final dimensions
+    if frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] > 10 and frame.shape[1] > 10:
+        return frame
+    return None
+
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Evaluate FastTD3 on Dexmachina environment and generate video.")
     parser.add_argument('--checkpoint', '-ck', type=str, required=True, help='Path to FastTD3 .pt checkpoint')
-    parser.add_argument('--num_envs', '-ne', type=int, default=20)
-    parser.add_argument('--env_name', type=str, default="dexmachina|allegro_hand|box-30-230")
+    parser.add_argument('--num_envs', '-ne', type=int, default=20, help='Number of parallel evaluation environments')
+    parser.add_argument('--env_name', type=str, default=None, help='Dexmachina env name e.g. dexmachina|allegro_hand|box-30-230')
+    parser.add_argument('--eval_episodes', type=int, default=1, help='Number of evaluation episodes')
     parser.add_argument('--record_video', action='store_true', help='Record a video of the evaluation')
+    parser.add_argument('--video_fname', type=str, default="video.mp4", help='Filename of the output video')
+    parser.add_argument('--out_dir', type=str, default=None, help='Output directory for evaluation results')
+    parser.add_argument('--device', type=str, default='cuda:0', help='Device for simulation and policy')
     args = parser.parse_args()
 
     # Load checkpoint
-    device = torch.device('cuda:0')
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    print(f"[INFO] Loading checkpoint: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
 
+    saved_args = checkpoint.get("args", {})
+    if isinstance(saved_args, dict):
+        pass
+    elif hasattr(saved_args, "__dict__"):
+        saved_args = vars(saved_args)
+    else:
+        saved_args = {}
+
+    env_name = args.env_name or saved_args.get("env_name", "dexmachina|allegro_hand|box-30-230")
+    print(f"[INFO] Environment: {env_name} | Eval Envs: {args.num_envs}")
+
     # Initialize environment config
-    dex_args = DexMachinaArgs(env_name=args.env_name, num_envs=args.num_envs)
+    dex_args = DexMachinaArgs(env_name=env_name, num_envs=args.num_envs)
     parts = dex_args.env_name.split("|")
     dex_args.hand = parts[1] if len(parts) > 1 else "allegro_hand"
     dex_args.clip = parts[2] if len(parts) > 2 else "box-30-230"
@@ -48,9 +110,12 @@ def main():
     env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
     env_kwargs['env_cfg']['is_eval'] = True
     env_kwargs['rand_cfg']['randomize'] = False
+    env_kwargs['env_cfg']['num_envs'] = args.num_envs
+    env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
     
     if args.record_video:
         env_kwargs['env_cfg']['scene_kwargs']['use_visualizer'] = True  
+        env_kwargs['env_cfg']['scene_kwargs']['show_viewer'] = False
         env_kwargs['env_cfg']['record_video'] = True 
         env_kwargs['env_cfg']['render_segmentation'] = False 
         if 'camera_kwargs' not in env_kwargs['env_cfg']:
@@ -58,8 +123,8 @@ def main():
         env_kwargs['env_cfg']['camera_kwargs']['front'] = dict(
             res=(512, 512),
             fov=40,
-            pos=(0.0, -1.0, 1.2),
-            lookat=(0.0, 0.0, 0.7),
+            pos=(0.5, -1.5, 1.2),
+            lookat=(0.0, -1.58, 2.0),
         )
     
     for name, cfg in env_kwargs['object_cfgs'].items():
@@ -76,111 +141,159 @@ def main():
     obj_state_tensor = gather_object_state_tensor(demo_data).to(device)
     
     n_act = env.num_actions
-    n_obs = env.num_obs if type(env.num_obs) == int else env.num_obs[0]
+    n_obs = env.num_obs if isinstance(env.num_obs, int) else env.num_obs[0]
     
+    actor_hidden_dim = saved_args.get("actor_hidden_dim", dex_args.actor_hidden_dim)
+    init_scale = saved_args.get("init_scale", dex_args.init_scale)
+    std_min = saved_args.get("std_min", dex_args.std_min)
+    std_max = saved_args.get("std_max", dex_args.std_max)
+    sim_type = saved_args.get("sim_type", "")
+    sim_dimension = saved_args.get("sim_dimension", 64)
+    seq_len = saved_args.get("seq_len", 8)
+
     # Initialize models
     actor = Actor(
         n_obs=n_obs,
         n_act=n_act,
         num_envs=args.num_envs,
+        init_scale=init_scale,
+        hidden_dim=actor_hidden_dim,
+        std_min=std_min,
+        std_max=std_max,
+        sim_type=sim_type,
+        sim_dimension=sim_dimension,
+        seq_len=seq_len,
         device=device,
-        init_scale=dex_args.init_scale,
-        hidden_dim=dex_args.actor_hidden_dim,
-        std_min=dex_args.std_min,
-        std_max=dex_args.std_max
     ).to(device)
     obs_normalizer = EmpiricalNormalization(shape=n_obs, device=device)
     
-    # strict=False does NOT ignore shape mismatches for existing keys! 
-    # We must manually delete noise_scales from the state dict before loading.
+    # Manually remove noise_scales before load_state_dict to support changing num_envs during eval
     actor_state_dict = checkpoint["actor_state_dict"].copy()
     if "noise_scales" in actor_state_dict:
         del actor_state_dict["noise_scales"]
     actor.load_state_dict(actor_state_dict, strict=False)
-    if "obs_normalizer_state" in checkpoint:
+
+    if checkpoint.get("obs_normalizer_state") is not None:
         obs_normalizer.load_state_dict(checkpoint["obs_normalizer_state"])
         
     actor.eval()
     obs_normalizer.eval()
     
-    # Evaluation Loop
-    obs = env.reset()
-    if isinstance(obs, dict):
-        obs = obs["obs"]
-        
     ep_len = uenv.max_episode_length
     obj = uenv.objects[uenv.object_names[0]]
     if obj.actuated:
         obj.set_joint_gains(0.0, 0.0, force_range=0.0)
-        
-    renders = []
-    if args.record_video:
-        render_out = uenv._floating_camera.render()
-        frame = render_out[0] if isinstance(render_out, tuple) else render_out
-        if isinstance(frame, torch.Tensor):
-            frame = frame.cpu().numpy()
-        renders.append(frame)
-        
-    eval_data = defaultdict(list)
-    
-    for i in range(ep_len):
-        with torch.inference_mode():
-            env_step = uenv.episode_length_buf.cpu().numpy()[0]
-            
-            # Normalize and act deterministically
-            norm_obs = obs_normalizer(obs, update=False)
-            actions = actor(norm_obs) # FastTD3 Actor outputs deterministic actions when eval() is set, or we just use the mean. 
-            # In FastTD3, the actor outputs the exact action if we don't add noise manually outside.
-            
-            demo_state = obj_state_tensor[env_step]
-            
-            obs, rew, dones, infos = env.step(actions)
-            obj_pos, obj_quat, obj_arti = obj.root_pos, obj.root_quat, obj.dof_pos
-            obj_state = torch.cat([obj_pos, obj_quat, obj_arti], dim=-1)
-            
-            eval_data["obj_state"].append(obj_state.cpu().numpy())
-            eval_data["demo_state"].append(demo_state.cpu().numpy())
-            
-            rew_dict = uenv.rew_dict
-            for key in ['pos_dist', 'rot_dist', 'arti_dist']:
-                if key in rew_dict:
-                    eval_data[key].append(rew_dict[key].cpu().numpy())
-            
-            if args.record_video and i % 2 == 0:
+
+    # Setup output directory
+    ckpt_dir = os.path.dirname(os.path.abspath(args.checkpoint))
+    ckpt_name = os.path.basename(args.checkpoint).replace('.pt', '')
+    out_dir = args.out_dir or os.path.join(ckpt_dir, f"{ckpt_name}_eval")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save config.yaml so dexmachina evaluation scripts (compute_add.py, group_results.py) can parse metadata
+    config_yaml_path = os.path.join(out_dir, "config.yaml")
+    config_payload = {
+        "clip": dex_args.clip,
+        "hand": dex_args.hand,
+        "env_name": env_name,
+        "num_envs": args.num_envs,
+    }
+    with open(config_yaml_path, "w") as f:
+        yaml.dump(config_payload, f, default_flow_style=False)
+    print(f"[INFO] Saved config metadata to: {config_yaml_path}")
+
+    # Evaluation Loop
+    for ep in range(args.eval_episodes):
+        print(f"[INFO] Running evaluation rollout (Episode {ep+1}/{args.eval_episodes}, length: {ep_len} steps)...")
+        obs = env.reset()
+        if isinstance(obs, dict):
+            obs = obs["obs"]
+
+        if args.record_video:
+            uenv.start_recording()
+            uenv.max_video_frames = int(ep_len * 2)
+
+        manual_renders = []
+        if args.record_video and uenv._floating_camera is not None:
+            try:
                 render_out = uenv._floating_camera.render()
                 frame = render_out[0] if isinstance(render_out, tuple) else render_out
-                if isinstance(frame, torch.Tensor):
-                    frame = frame.cpu().numpy()
-                renders.append(frame)
-                    
-    eval_data = {k: np.stack(v) for k, v in eval_data.items()}
-    
-    ckpt_dir = os.path.dirname(args.checkpoint)
-    ckpt_name = os.path.basename(args.checkpoint).replace('.pt', '')
-    out_dir = os.path.join(ckpt_dir, f"{ckpt_name}_eval")
-    os.makedirs(out_dir, exist_ok=True)
-    out_file = os.path.join(out_dir, "eval_ep0.npy")
-    
-    np.save(out_file, eval_data)
-    print(f"Saved FastTD3 eval data to {out_file}")
-    
-    if args.record_video and len(renders) > 0:
-        from moviepy.editor import ImageSequenceClip
-        video_fname = os.path.join(out_dir, "video.mp4")
+                sanitized = sanitize_frame(frame)
+                if sanitized is not None:
+                    manual_renders.append(sanitized)
+            except Exception as e:
+                pass
+
+        eval_data = defaultdict(list)
         
-        # Ensure RGB
-        clean_renders = []
-        for r in renders:
-            img = r[:,:,:3] if r.shape[-1] == 4 else r
-            if img.dtype != np.uint8:
-                if img.max() <= 1.0:
-                    img = (img * 255)
-                img = img.astype(np.uint8)
-            clean_renders.append(img)
-            
-        clip = ImageSequenceClip(clean_renders, fps=30)
-        clip.write_videofile(video_fname)
-        print(f"Saved video to {video_fname}")
+        for i in range(ep_len):
+            with torch.inference_mode():
+                env_step = uenv.episode_length_buf.cpu().numpy()[0]
+                
+                # Normalize observation and act deterministically
+                norm_obs = obs_normalizer(obs, update=False)
+                actions = actor(norm_obs)
+                
+                demo_state = obj_state_tensor[env_step]
+                
+                obs, rew, dones, infos = env.step(actions)
+                if isinstance(obs, dict):
+                    obs = obs["obs"]
+
+                obj_pos, obj_quat, obj_arti = obj.root_pos, obj.root_quat, obj.dof_pos
+                obj_state = torch.cat([obj_pos, obj_quat, obj_arti], dim=-1)
+                
+                eval_data["obj_state"].append(obj_state.cpu().numpy())
+                eval_data["demo_state"].append(demo_state.cpu().numpy())
+                
+                rew_dict = uenv.rew_dict
+                for key in ['pos_dist', 'rot_dist', 'arti_dist']:
+                    if key in rew_dict:
+                        eval_data[key].append(rew_dict[key].cpu().numpy())
+                
+                if args.record_video and i % 2 == 0 and uenv._floating_camera is not None:
+                    try:
+                        render_out = uenv._floating_camera.render()
+                        frame = render_out[0] if isinstance(render_out, tuple) else render_out
+                        sanitized = sanitize_frame(frame)
+                        if sanitized is not None:
+                            manual_renders.append(sanitized)
+                    except Exception as e:
+                        pass
+                        
+        eval_data = {k: np.stack(v) for k, v in eval_data.items()}
+        out_file = os.path.join(out_dir, f"eval_ep{ep}.npy")
+        np.save(out_file, eval_data)
+        print(f"[SUCCESS] Saved FastTD3 eval data to {out_file}")
+        
+        if args.record_video:
+            # First try retrieving recorded frames from BaseEnv
+            recorded_frames = uenv.get_recorded_frames(wait_for_max=False)
+            source_frames = recorded_frames if (recorded_frames is not None and len(recorded_frames) > 0) else manual_renders
+
+            if source_frames and len(source_frames) > 0:
+                from moviepy.editor import ImageSequenceClip
+                video_name = args.video_fname if args.eval_episodes == 1 else f"video_ep{ep}.mp4"
+                video_path = os.path.join(out_dir, video_name)
+                
+                clean_renders = []
+                for r in source_frames:
+                    clean = sanitize_frame(r)
+                    if clean is not None:
+                        clean_renders.append(clean)
+                
+                if len(clean_renders) > 0:
+                    fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
+                    clip = ImageSequenceClip(clean_renders, fps=fps)
+                    clip.write_videofile(video_path, logger=None)
+                    print(f"[SUCCESS] Saved video ({len(clean_renders)} frames, {clean_renders[0].shape}) to {video_path}")
+                else:
+                    print("[WARNING] Could not format any valid RGB frames for video encoding.")
+            else:
+                print("[WARNING] No video frames were captured during rollout.")
+
+    print(f"[SUCCESS] Evaluation complete! Results saved in {out_dir}")
+
 
 if __name__ == '__main__':
     main()

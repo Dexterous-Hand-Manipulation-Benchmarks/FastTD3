@@ -108,8 +108,8 @@ class GenesisFastTD3Wrapper:
         if hasattr(self.env, "_floating_camera") and self.env._floating_camera is not None:
             try:
                 # Force Genesis to render the frame
-                self.env._floating_camera.render()
-                image = self.env._floating_camera.rgba
+                render_out = self.env._floating_camera.render()
+                image = render_out[0] if isinstance(render_out, tuple) else render_out
 
                 # Move tensor to CPU numpy array
                 if isinstance(image, torch.Tensor):
@@ -118,6 +118,12 @@ class GenesisFastTD3Wrapper:
                 # Drop the alpha channel (RGBA -> RGB) for WandB compatibility
                 if image.shape[-1] == 4:
                     image = image[..., :3]
+
+                # Ensure uint8
+                if image.dtype != np.uint8:
+                    if image.max() <= 1.01:
+                        image = image * 255.0
+                    image = np.clip(image, 0, 255).astype(np.uint8)
 
                 # Add batch dimension (Batch, Height, Width, Channels)
                 if image.ndim == 3:
