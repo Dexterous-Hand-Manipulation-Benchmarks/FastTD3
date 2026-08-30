@@ -22,8 +22,12 @@ class BaseArgs:
     """the rank of the device"""
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
-    project: str = "FastTD3"
+    project: str = "dexmachina"
     """the project name"""
+    group_name: str = "FastTD3"
+    """the wandb group name"""
+    entity: str = "schrapsi-kit"
+    """the wandb entity/team name"""
     use_wandb: bool = True
     """whether to use wandb"""
     checkpoint_path: str = None
@@ -572,6 +576,7 @@ class DexMachinaArgs(BaseArgs):
 
     # Reward Args
     action_penalty: float = 0.01
+    force_penalty: float = 0.1
     imi_rew_weight: float = 0.3
     imi_wrist_weight: float = 0.5
     contact_rew_weight: float = 3.0

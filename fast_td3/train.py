@@ -40,6 +40,16 @@ from torch.amp import autocast, GradScaler
 
 from tensordict import TensorDict
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
+LOGGING_DIR = os.path.join(PROJECT_ROOT, "logging")
+ENVS_FASTTD3_DIR = os.path.join(PROJECT_ROOT, "envs", "FastTD3")
+for p in [LOGGING_DIR, PROJECT_ROOT, ENVS_FASTTD3_DIR, SCRIPT_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from wandb_logger import UniversalLogger
+
 from fast_td3_utils import (
     EmpiricalNormalization,
     RewardNormalizer,
@@ -64,6 +74,20 @@ def main():
     timestamp = time.strftime("%Y%m%d")
     run_name = f"{args.env_name}__{args.exp_name}__{args.seed}"
 
+    # --- DYNAMIC LOGGER INSTALLATION ---
+    tokens = args.env_name.split("|")
+    hand_name = getattr(args, "hand", tokens[1] if len(tokens) > 1 else "unknown_hand")
+    clip_name = getattr(args, "clip", tokens[2] if len(tokens) > 2 else "unknown_clip")
+
+    UniversalLogger.install(
+        algo="fasttd3",
+        hand=str(hand_name),
+        clip=str(clip_name),
+        seed=int(args.seed),
+        num_envs=int(args.num_envs),
+    )
+    # -----------------------------------
+
     amp_enabled = args.amp and args.cuda and torch.cuda.is_available()
     amp_device_type = (
         "cuda"
@@ -75,12 +99,17 @@ def main():
     scaler = GradScaler(enabled=amp_enabled and amp_dtype == torch.float16)
 
     if args.use_wandb:
-        wandb.init(
-            project=args.project,
-            name=run_name,
-            config=vars(args),
-            save_code=True,
-        )
+        wandb_kwargs = {
+            "project": args.project,
+            "name": run_name,
+            "config": vars(args),
+            "save_code": True,
+        }
+        if hasattr(args, "entity") and args.entity:
+            wandb_kwargs["entity"] = args.entity
+        if hasattr(args, "group_name") and args.group_name:
+            wandb_kwargs["group"] = args.group_name
+        wandb.init(**wandb_kwargs)
 
     random.seed(args.seed)
     np.random.seed(args.seed)

@@ -2,9 +2,11 @@ import os
 import sys
 import argparse
 from collections import defaultdict
+import json
 import yaml
 import numpy as np
 import torch
+import wandb
 import genesis as gs
 
 # Ensure FastTD3 and dexmachina packages can be imported
@@ -79,6 +81,10 @@ def main():
     parser.add_argument('--video_fname', type=str, default="video.mp4", help='Filename of the output video')
     parser.add_argument('--out_dir', type=str, default=None, help='Output directory for evaluation results')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device for simulation and policy')
+    parser.add_argument('--wandb_run_id', type=str, default=None, help='WandB run ID to attach evaluation videos and metrics to')
+    parser.add_argument('--step', type=int, default=None, help='The exact checkpoint step')
+    parser.add_argument('--project', type=str, default='dexmachina', help='WandB project name')
+    parser.add_argument('--entity', type=str, default='schrapsi-kit', help='WandB entity/team name')
     args = parser.parse_args()
 
     # Load checkpoint
@@ -206,6 +212,9 @@ def main():
         yaml.dump(config_payload, f, default_flow_style=False)
     print(f"[INFO] Saved config metadata to: {config_yaml_path}")
 
+    last_video_path = None
+    ep_return = 0.0
+
     # Evaluation Loop
     for ep in range(args.eval_episodes):
         print(f"[INFO] Running evaluation rollout (Episode {ep+1}/{args.eval_episodes}, length: {ep_len} steps)...")
@@ -229,6 +238,7 @@ def main():
                 pass
 
         eval_data = defaultdict(list)
+        accumulated_rewards = torch.zeros(args.num_envs, device=device)
         
         for i in range(ep_len):
             with torch.inference_mode():
@@ -241,6 +251,7 @@ def main():
                 demo_state = obj_state_tensor[env_step]
                 
                 obs, rew, dones, infos = env.step(actions)
+                accumulated_rewards += rew
                 if isinstance(obs, dict):
                     obs = obs["obs"]
 
@@ -265,6 +276,7 @@ def main():
                     except Exception as e:
                         pass
                         
+        ep_return = accumulated_rewards.mean().item()
         eval_data = {k: np.stack(v) for k, v in eval_data.items()}
         out_file = os.path.join(out_dir, f"eval_ep{ep}.npy")
         np.save(out_file, eval_data)
@@ -290,11 +302,65 @@ def main():
                     fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
                     clip = ImageSequenceClip(clean_renders, fps=fps)
                     clip.write_videofile(video_path, logger=None)
+                    last_video_path = video_path
                     print(f"[SUCCESS] Saved video ({len(clean_renders)} frames, {clean_renders[0].shape}) to {video_path}")
                 else:
                     print("[WARNING] Could not format any valid RGB frames for video encoding.")
             else:
                 print("[WARNING] No video frames were captured during rollout.")
+
+    # Compute ADD and AUC-ADD metrics
+    stats = None
+    try:
+        from dexmachina.eval.compute_add import compute_for_eval
+        obj_name = dex_args.clip.split("-")[0]
+        eval_file_path = os.path.join(out_dir, "eval_ep0.npy")
+        stats_path = os.path.join(out_dir, "add_stats.json")
+        compute_for_eval(
+            eval_path=eval_file_path,
+            obj_name=obj_name,
+            out_name="add.npy",
+            stats_name="add_stats.json",
+            overwrite=True,
+            output_cache=False,
+            cache_dir="dexmachina/eval/sub_verts",
+        )
+        if os.path.exists(stats_path):
+            with open(stats_path, "r") as f:
+                stats = json.load(f)
+            print(f"[RESULTS] ADD-AUC: {stats.get('auc', {}).get('overall')}, ADD: {stats.get('mean_add', {}).get('overall')}")
+    except Exception as e:
+        print(f"[WARNING] Could not compute ADD metrics directly: {e}")
+
+    # Sync metrics and video to WandB if wandb_run_id is provided
+    if args.wandb_run_id:
+        print(f"[INFO] Connecting to WandB run {args.wandb_run_id} ({args.entity}/{args.project})...")
+        wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
+
+        log_payload = {
+            "eval/return": ep_return,
+            "eval/ep_length": float(ep_len),
+        }
+        if stats is not None:
+            if "auc" in stats and "overall" in stats["auc"]:
+                log_payload["eval/auc_add"] = stats["auc"]["overall"]
+            if "mean_add" in stats and "overall" in stats["mean_add"]:
+                log_payload["eval/add"] = stats["mean_add"]["overall"]
+
+        if last_video_path and os.path.exists(last_video_path):
+            cap_text = f"Checkpoint Step: {args.step}" if args.step is not None else "Eval Video"
+            fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
+            log_payload["eval_video"] = wandb.Video(last_video_path, fps=fps, format="mp4", caption=cap_text)
+            print(f"[INFO] Attached video {last_video_path} to WandB payload.")
+
+        if args.step is not None:
+            log_payload["checkpoint_step"] = args.step
+
+        if log_payload:
+            wandb.log(log_payload)
+            print(f"[SUCCESS] Logged evaluation payload to WandB: {list(log_payload.keys())}")
+
+        wandb.finish()
 
     print(f"[SUCCESS] Evaluation complete! Results saved in {out_dir}")
 
