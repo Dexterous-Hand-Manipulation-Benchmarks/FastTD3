@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import dataclass
 import tyro
 
@@ -142,18 +143,27 @@ def get_args():
     """
     Parse command-line arguments and return the appropriate Args instance based on env_name.
     """
-    # First, parse all arguments using the base Args class
-    base_args = tyro.cli(BaseArgs)
+    # Detect env_name from command-line arguments before invoking tyro
+    env_name = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--env_name" and i + 1 < len(sys.argv):
+            env_name = sys.argv[i + 1]
+            break
+        elif arg.startswith("--env_name="):
+            env_name = arg.split("=", 1)[1]
+            break
+
+    # If not passed explicitly via CLI, fallback to BaseArgs default
+    if env_name is None:
+        try:
+            base_args = tyro.cli(BaseArgs)
+            env_name = base_args.env_name
+        except Exception:
+            env_name = "h1hand-stand-v0"
 
     # Map environment names to their specific Args classes
-    # For tasks not here, default hyperparameters are used
-    # See below links for available task list
-    # - HumanoidBench (https://arxiv.org/abs/2403.10506)
-    # - IsaacLab (https://isaac-sim.github.io/IsaacLab/main/source/overview/environments.html)
-    # - MuJoCo Playground (https://arxiv.org/abs/2502.08844)
     env_to_args_class = {
         # HumanoidBench
-        # NOTE: These tasks are not full list of HumanoidBench tasks
         "h1hand-reach-v0": H1HandReachArgs,
         "h1hand-balance-simple-v0": H1HandBalanceSimpleArgs,
         "h1hand-balance-hard-v0": H1HandBalanceHardArgs,
@@ -164,9 +174,7 @@ def get_args():
         "h1hand-basketball-v0": H1HandBasketballArgs,
         "h1hand-window-v0": H1HandWindowArgs,
         "h1hand-package-v0": H1HandPackageArgs,
-        "h1hand-truck-v0": H1HandTruckArgs,
         # MuJoCo Playground
-        # NOTE: These tasks are not full list of MuJoCo Playground tasks
         "G1JoystickFlatTerrain": G1JoystickFlatTerrainArgs,
         "G1JoystickRoughTerrain": G1JoystickRoughTerrainArgs,
         "T1JoystickFlatTerrain": T1JoystickFlatTerrainArgs,
@@ -176,9 +184,8 @@ def get_args():
         "Go1JoystickFlatTerrain": Go1JoystickFlatTerrainArgs,
         "Go1JoystickRoughTerrain": Go1JoystickRoughTerrainArgs,
         "Go1Getup": Go1GetupArgs,
-        "CheetahRun": CheetahRunArgs,  # NOTE: Example config for DeepMind Control Suite
+        "CheetahRun": CheetahRunArgs,
         # IsaacLab
-        # NOTE: These tasks are not full list of IsaacLab tasks
         "Isaac-Lift-Cube-Franka-v0": IsaacLiftCubeFrankaArgs,
         "Isaac-Open-Drawer-Franka-v0": IsaacOpenDrawerFrankaArgs,
         "Isaac-Velocity-Flat-H1-v0": IsaacVelocityFlatH1Args,
@@ -191,29 +198,20 @@ def get_args():
         "MTBench-meta-world-v2-mt10": MetaWorldMT10Args,
         "MTBench-meta-world-v2-mt50": MetaWorldMT50Args,
     }
-    # If the provided env_name has a specific Args class, use it
-    if base_args.env_name in env_to_args_class:
-        specific_args_class = env_to_args_class[base_args.env_name]
-        # Re-parse with the specific class, maintaining any user overrides
-        specific_args = tyro.cli(specific_args_class)
-        return specific_args
 
-    if base_args.env_name.startswith("h1hand-") or base_args.env_name.startswith("h1-"):
-        # HumanoidBench
-        specific_args = tyro.cli(HumanoidBenchArgs)
-    elif base_args.env_name.startswith("Isaac-"):
-        # IsaacLab
-        specific_args = tyro.cli(IsaacLabArgs)
-    elif base_args.env_name.startswith("MTBench-"):
-        # MTBench
-        specific_args = tyro.cli(MTBenchArgs)
-    elif base_args.env_name.startswith("dexmachina"):
-        # DexMachina
-        specific_args = tyro.cli(DexMachinaArgs)
+    if env_name in env_to_args_class:
+        return tyro.cli(env_to_args_class[env_name])
+
+    if env_name.startswith("h1hand-") or env_name.startswith("h1-"):
+        return tyro.cli(HumanoidBenchArgs)
+    elif env_name.startswith("Isaac-"):
+        return tyro.cli(IsaacLabArgs)
+    elif env_name.startswith("MTBench-"):
+        return tyro.cli(MTBenchArgs)
+    elif env_name.startswith("dexmachina"):
+        return tyro.cli(DexMachinaArgs)
     else:
-        # MuJoCo Playground
-        specific_args = tyro.cli(MuJoCoPlaygroundArgs)
-    return specific_args
+        return tyro.cli(MuJoCoPlaygroundArgs)
 
 
 @dataclass
