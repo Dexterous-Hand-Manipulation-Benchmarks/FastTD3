@@ -71,8 +71,9 @@ except ImportError:
 def main():
     args = get_args()
     print(args)
-    timestamp = time.strftime("%Y%m%d")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_name = f"{args.env_name}__{args.exp_name}__{args.seed}"
+    checkpoint_dir = f"models/FastTD3/{args.exp_name}/{timestamp}"
 
     # --- DYNAMIC LOGGER INSTALLATION ---
     tokens = args.env_name.split("|")
@@ -916,7 +917,8 @@ def main():
                     and global_step > 0
                     and global_step % args.save_interval == 0
             ):
-                print(f"Saving model at global step {global_step}")
+                ckpt_path = f"{checkpoint_dir}/step{global_step}.pt"
+                print(f"[INFO] Saving checkpoint at global step {global_step} to: {ckpt_path}")
                 save_params(
                     global_step,
                     actor,
@@ -925,7 +927,7 @@ def main():
                     obs_normalizer,
                     critic_obs_normalizer,
                     args,
-                    f"models/{timestamp}-{args.env_name}/{run_name}_{global_step}.pt",
+                    ckpt_path,
                 )
 
         global_step += 1
@@ -935,6 +937,8 @@ def main():
 
     progress.stop()
 
+    final_ckpt_path = f"{checkpoint_dir}/final.pt"
+    print(f"[INFO] Saving final checkpoint at global step {global_step} to: {final_ckpt_path}")
     save_params(
         global_step,
         actor,
@@ -943,7 +947,7 @@ def main():
         obs_normalizer,
         critic_obs_normalizer,
         args,
-        f"models/{timestamp}-{args.env_name}/{run_name}_final.pt",
+        final_ckpt_path,
     )
 
 
