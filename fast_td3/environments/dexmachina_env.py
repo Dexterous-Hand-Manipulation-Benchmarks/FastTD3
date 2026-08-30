@@ -74,6 +74,12 @@ class GenesisFastTD3Wrapper:
         if not isinstance(truncated, torch.Tensor):
             truncated = torch.tensor(truncated, device=self.sim_device, dtype=torch.bool)
 
+        # NaN safeguards against simulation divergence
+        if torch.isnan(obs).any():
+            obs = torch.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+        if torch.isnan(rew).any():
+            rew = torch.nan_to_num(rew, nan=0.0, posinf=0.0, neginf=0.0)
+
         # FastTD3 expects a unified `dones` tensor
         dones = terminated | truncated
 
