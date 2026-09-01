@@ -238,10 +238,18 @@ def main():
         eval_base_env = BaseEnv(**eval_env_kwargs)
         eval_envs = GenesisFastTD3Wrapper(eval_base_env, rl_device=sim_device)
 
-        print(f"[INFO] Building Dexmachina RENDER env...")
+        print(f"[INFO] Building Dexmachina RENDER env (Unassisted True Physics)...")
         dex_args.num_envs = 1  # We only need 1 environment to record a video!
 
         render_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
+        render_env_kwargs['env_cfg']['is_eval'] = True
+        render_env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
+        render_env_kwargs['rand_cfg']['randomize'] = False
+        render_env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
+        for name, cfg in render_env_kwargs['object_cfgs'].items():
+            cfg['actuated'] = False
+        render_env_kwargs.pop("curriculum_cfg", None)
+
         render_base_env = BaseEnv(**render_env_kwargs)
         render_env = GenesisFastTD3Wrapper(render_base_env, rl_device=sim_device)
         
@@ -782,10 +790,6 @@ def main():
             epoch = (global_step * max_epochs) // args.total_timesteps
             if epoch > current_epoch:
                 envs.env.set_curriculum(epoch)
-                if hasattr(eval_envs, "env") and hasattr(eval_envs.env, "set_curriculum"):
-                    eval_envs.env.set_curriculum(epoch)
-                if hasattr(render_env, "env") and hasattr(render_env.env, "set_curriculum"):
-                    render_env.env.set_curriculum(epoch)
                 current_epoch = epoch
 
         mark_step()
