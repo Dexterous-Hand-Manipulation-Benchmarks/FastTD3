@@ -105,6 +105,26 @@ class GenesisFastTD3Wrapper:
         if "log" in extras:
             infos["episode_info"] = extras["log"]
 
+        # 3. Success and Tracking Error Metrics for Online Validation
+        if hasattr(self.env, "rew_dict") and isinstance(self.env.rew_dict, dict):
+            pos_dist = self.env.rew_dict.get("pos_dist", None)
+            rot_dist = self.env.rew_dict.get("rot_dist", None)
+            arti_dist = self.env.rew_dict.get("arti_dist", None)
+            if pos_dist is not None and rot_dist is not None:
+                # 2cm threshold: pos error < 0.02m and rot error < 0.20 rad (~11.5 deg)
+                succ_2cm = (pos_dist < 0.02) & (rot_dist < 0.20)
+                # 5cm threshold: pos error < 0.05m and rot error < 0.35 rad (~20 deg)
+                succ_5cm = (pos_dist < 0.05) & (rot_dist < 0.35)
+                if arti_dist is not None:
+                    succ_2cm = succ_2cm & (arti_dist < 0.10)
+                    succ_5cm = succ_5cm & (arti_dist < 0.15)
+                infos["success_2cm"] = succ_2cm
+                infos["success_5cm"] = succ_5cm
+                infos["pos_dist"] = pos_dist
+                infos["rot_dist"] = rot_dist
+                if arti_dist is not None:
+                    infos["arti_dist"] = arti_dist
+
         return obs, rew, dones, infos
 
     def render(self):

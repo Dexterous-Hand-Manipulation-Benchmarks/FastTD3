@@ -347,6 +347,29 @@ def main():
             if "mean_add" in stats and "overall" in stats["mean_add"]:
                 log_payload["eval/add"] = stats["mean_add"]["overall"]
 
+        add_npy_path = os.path.join(out_dir, "add.npy")
+        if os.path.exists(add_npy_path):
+            try:
+                add_data = np.load(add_npy_path, allow_pickle=True).item()
+                succ_2cm_list = [np.mean(add_data[part] < 0.02) for part in add_data.keys()]
+                succ_5cm_list = [np.mean(add_data[part] < 0.05) for part in add_data.keys()]
+                log_payload["eval/success_2cm"] = float(np.mean(succ_2cm_list))
+                log_payload["eval/success_5cm"] = float(np.mean(succ_5cm_list))
+                print(f"[RESULTS] Success (2cm): {log_payload['eval/success_2cm'] * 100:.2f}% | Success (5cm): {log_payload['eval/success_5cm'] * 100:.2f}%")
+            except Exception as e:
+                print(f"[WARNING] Could not compute threshold success rates: {e}")
+
+        eval_ep_path = os.path.join(out_dir, "eval_ep0.npy")
+        if os.path.exists(eval_ep_path):
+            try:
+                ep_data = np.load(eval_ep_path, allow_pickle=True).item()
+                if "pos_dist" in ep_data:
+                    log_payload["eval/pos_dist"] = float(np.mean(ep_data["pos_dist"]))
+                if "rot_dist" in ep_data:
+                    log_payload["eval/rot_dist"] = float(np.mean(ep_data["rot_dist"]))
+            except Exception as e:
+                pass
+
         if last_video_path and os.path.exists(last_video_path):
             cap_text = f"Checkpoint Step: {args.step}" if args.step is not None else "Eval Video"
             fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30

@@ -220,13 +220,21 @@ def main():
         envs = GenesisFastTD3Wrapper(base_env, rl_device=sim_device)
         env_type = "dexmachina"
 
-        print(f"[INFO] Building Dexmachina EVALUATION env...")
+        print(f"[INFO] Building Dexmachina EVALUATION env (Unassisted True Physics)...")
         original_num_envs = args.num_envs
         # Cap the evaluation environments to 64 to prevent CUDA OOM errors
         eval_num = min(getattr(args, "num_eval_envs", 32), 32)
         dex_args.num_envs = eval_num
 
         eval_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
+        eval_env_kwargs['env_cfg']['is_eval'] = True
+        eval_env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
+        eval_env_kwargs['rand_cfg']['randomize'] = False
+        eval_env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
+        for name, cfg in eval_env_kwargs['object_cfgs'].items():
+            cfg['actuated'] = False
+        eval_env_kwargs.pop("curriculum_cfg", None)
+
         eval_base_env = BaseEnv(**eval_env_kwargs)
         eval_envs = GenesisFastTD3Wrapper(eval_base_env, rl_device=sim_device)
 
@@ -462,6 +470,11 @@ def main():
         episode_lengths = torch.zeros(num_eval_envs, device=device)
         done_masks = torch.zeros(num_eval_envs, dtype=torch.bool, device=device)
 
+        succ_2cm_list = []
+        succ_5cm_list = []
+        pos_dist_list = []
+        rot_dist_list = []
+
         if env_type == "isaaclab":
             obs = eval_envs.reset(random_start_init=False)
         else:
@@ -482,6 +495,16 @@ def main():
                 rewards = (
                     infos["episode"]["success"].float() if "episode" in infos else 0.0
                 )
+            elif env_type == "dexmachina":
+                if "success_2cm" in infos and isinstance(infos["success_2cm"], torch.Tensor):
+                    succ_2cm_list.append(infos["success_2cm"].float())
+                if "success_5cm" in infos and isinstance(infos["success_5cm"], torch.Tensor):
+                    succ_5cm_list.append(infos["success_5cm"].float())
+                if "pos_dist" in infos and isinstance(infos["pos_dist"], torch.Tensor):
+                    pos_dist_list.append(infos["pos_dist"].float())
+                if "rot_dist" in infos and isinstance(infos["rot_dist"], torch.Tensor):
+                    rot_dist_list.append(infos["rot_dist"].float())
+
             episode_returns = torch.where(
                 ~done_masks, episode_returns + rewards, episode_returns
             )
@@ -495,7 +518,20 @@ def main():
                 break
             obs = next_obs
 
-        return episode_returns.mean().item(), episode_lengths.mean().item()
+        eval_out = {
+            "eval_avg_return": episode_returns.mean().item(),
+            "eval_avg_length": episode_lengths.mean().item(),
+        }
+        if succ_2cm_list:
+            eval_out["eval/success_2cm"] = torch.stack(succ_2cm_list).mean().item()
+        if succ_5cm_list:
+            eval_out["eval/success_5cm"] = torch.stack(succ_5cm_list).mean().item()
+        if pos_dist_list:
+            eval_out["eval/pos_dist"] = torch.stack(pos_dist_list).mean().item()
+        if rot_dist_list:
+            eval_out["eval/rot_dist"] = torch.stack(rot_dist_list).mean().item()
+
+        return eval_out
 
     def render_with_rollout():
         # Quick rollout for rendering
@@ -880,12 +916,11 @@ def main():
 
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
-                        eval_avg_return, eval_avg_length = evaluate()
+                        eval_metrics = evaluate()
                         if env_type in ["humanoid_bench", "isaaclab", "mtbench"]:
                             # NOTE: Hacky way of evaluating performance, but just works
                             obs = envs.reset()
-                        logs["eval_avg_return"] = eval_avg_return
-                        logs["eval_avg_length"] = eval_avg_length
+                        logs.update(eval_metrics)
 
                     if (
                             args.render_interval > 0
