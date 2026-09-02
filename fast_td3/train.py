@@ -921,6 +921,9 @@ def main():
                             else:
                                 logs[clean_k] = v.item()
 
+                    if current_epoch >= 0:
+                        logs["env/curriculum_epoch"] = current_epoch
+
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
                         eval_metrics = evaluate()
