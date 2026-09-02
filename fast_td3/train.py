@@ -937,12 +937,14 @@ def main():
                             ),  # Convert to (T, C, H, W) format
                             fps=30,
                             format="gif",
+                            caption=f"Training Rollout (Env Step: {global_step * args.num_envs})",
                         )
-                        logs["eval/video"] = render_video
+                        logs["media/train_video"] = render_video
                 if args.use_wandb:
                     env_step = global_step * args.num_envs
                     wandb.log(
                         {
+                            "global/step": env_step,
                             "global/env_step": env_step,
                             "speed": speed,
                             "frame": env_step,

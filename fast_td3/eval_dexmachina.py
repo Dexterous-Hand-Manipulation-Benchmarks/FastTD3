@@ -350,7 +350,7 @@ def main():
         clip_name = dex_args.clip if hasattr(dex_args, "clip") else (tokens[2] if len(tokens) > 2 else "unknown_clip")
 
         UniversalLogger.install(
-            algo="fasttd3",
+            algo="fast_td3",
             hand=str(hand_name),
             clip=str(clip_name),
             seed=int(saved_args.get("seed", 0)),
@@ -395,10 +395,11 @@ def main():
         if last_video_path and os.path.exists(last_video_path):
             cap_text = f"Checkpoint Step: {args.step}" if args.step is not None else "Eval Video"
             fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
-            log_payload["eval/video"] = wandb.Video(last_video_path, fps=fps, format="gif", caption=cap_text)
+            log_payload["media/eval_video"] = wandb.Video(last_video_path, fps=fps, format="gif", caption=cap_text)
             print(f"[INFO] Attached GIF {last_video_path} to WandB payload.")
 
         if args.step is not None:
+            log_payload["global/step"] = args.step
             log_payload["global/env_step"] = args.step
 
         if log_payload:
