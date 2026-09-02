@@ -80,12 +80,14 @@ def main():
     hand_name = getattr(args, "hand", tokens[1] if len(tokens) > 1 else "unknown_hand")
     clip_name = getattr(args, "clip", tokens[2] if len(tokens) > 2 else "unknown_clip")
 
+    eval_num = min(getattr(args, "num_eval_envs", 32), 32)
     UniversalLogger.install(
-        algo="fasttd3",
+        algo="fast_td3",
         hand=str(hand_name),
         clip=str(clip_name),
         seed=int(args.seed),
-        num_envs=int(args.num_envs),
+        num_train_envs=int(args.num_envs),
+        num_eval_envs=int(eval_num),
     )
     # -----------------------------------
 

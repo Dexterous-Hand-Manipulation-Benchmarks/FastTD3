@@ -348,13 +348,14 @@ def main():
         tokens = env_name.split("|")
         hand_name = dex_args.hand if hasattr(dex_args, "hand") else (tokens[1] if len(tokens) > 1 else "unknown_hand")
         clip_name = dex_args.clip if hasattr(dex_args, "clip") else (tokens[2] if len(tokens) > 2 else "unknown_clip")
-
+        training_num_envs = int(saved_args.get("num_envs", 768))
         UniversalLogger.install(
             algo="fast_td3",
             hand=str(hand_name),
             clip=str(clip_name),
             seed=int(saved_args.get("seed", 0)),
-            num_envs=int(args.num_envs),
+            num_train_envs=training_num_envs,
+            num_eval_envs=int(args.num_envs),
         )
 
         wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
