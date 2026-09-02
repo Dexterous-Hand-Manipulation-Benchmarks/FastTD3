@@ -912,13 +912,14 @@ def main():
                     }
 
                     for k, v in latest_episode_info.items():
+                        clean_k = k if k.startswith("env/") else f"env/{k}"
                         if isinstance(v, (int, float)):
-                            logs[f"env/{k}"] = v
+                            logs[clean_k] = v
                         elif hasattr(v, "item"):
                             if hasattr(v, "numel") and v.numel() > 1:
-                                logs[f"env/{k}"] = v.float().mean().item()
+                                logs[clean_k] = v.float().mean().item()
                             else:
-                                logs[f"env/{k}"] = v.item()
+                                logs[clean_k] = v.item()
 
                     if args.eval_interval > 0 and global_step % args.eval_interval == 0:
                         print(f"Evaluating at global step {global_step}")
