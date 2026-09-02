@@ -9,14 +9,16 @@ import torch
 import wandb
 import genesis as gs
 
-# Ensure FastTD3 and dexmachina packages can be imported
+# Ensure FastTD3, logging, and dexmachina packages can be imported
 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 fast_td3_dir = os.path.join(base_dir, "FastTD3")
 dexmachina_dir = os.path.join(base_dir, "dexmachina")
-for p in [base_dir, fast_td3_dir, dexmachina_dir, os.path.dirname(__file__)]:
+logging_dir = os.path.join(base_dir, "logging")
+for p in [base_dir, fast_td3_dir, dexmachina_dir, logging_dir, os.path.dirname(__file__)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from wandb_logger import UniversalLogger
 from fast_td3.hyperparams import DexMachinaArgs
 from fast_td3.fast_td3 import Actor
 from fast_td3.fast_td3_utils import EmpiricalNormalization
@@ -78,7 +80,7 @@ def main():
     parser.add_argument('--env_name', type=str, default=None, help='Dexmachina env name e.g. dexmachina|allegro_hand|box-30-230')
     parser.add_argument('--eval_episodes', type=int, default=1, help='Number of evaluation episodes')
     parser.add_argument('--record_video', action='store_true', help='Record a video of the evaluation')
-    parser.add_argument('--video_fname', type=str, default="video.mp4", help='Filename of the output video')
+    parser.add_argument('--video_fname', type=str, default="video.gif", help='Filename of the output video')
     parser.add_argument('--out_dir', type=str, default=None, help='Output directory for evaluation results')
     parser.add_argument('--device', type=str, default='cuda:0', help='Device for simulation and policy')
     parser.add_argument('--wandb_run_id', type=str, default=None, help='WandB run ID to attach evaluation videos and metrics to')
@@ -288,8 +290,11 @@ def main():
             source_frames = recorded_frames if (recorded_frames is not None and len(recorded_frames) > 0) else manual_renders
 
             if source_frames and len(source_frames) > 0:
-                from moviepy.editor import ImageSequenceClip
-                video_name = args.video_fname if args.eval_episodes == 1 else f"video_ep{ep}.mp4"
+                video_name = args.video_fname if args.eval_episodes == 1 else f"video_ep{ep}.gif"
+                if video_name.endswith(".mp4"):
+                    video_name = video_name[:-4] + ".gif"
+                if not video_name.endswith(".gif"):
+                    video_name += ".gif"
                 video_path = os.path.join(out_dir, video_name)
                 
                 clean_renders = []
@@ -300,12 +305,17 @@ def main():
                 
                 if len(clean_renders) > 0:
                     fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
-                    clip = ImageSequenceClip(clean_renders, fps=fps)
-                    clip.write_videofile(video_path, logger=None)
+                    try:
+                        import imageio
+                        imageio.mimsave(video_path, clean_renders, fps=fps, loop=0)
+                    except Exception:
+                        from moviepy.editor import ImageSequenceClip
+                        clip = ImageSequenceClip(clean_renders, fps=fps)
+                        clip.write_gif(video_path, fps=fps, logger=None)
                     last_video_path = video_path
-                    print(f"[SUCCESS] Saved video ({len(clean_renders)} frames, {clean_renders[0].shape}) to {video_path}")
+                    print(f"[SUCCESS] Saved GIF ({len(clean_renders)} frames, {clean_renders[0].shape}) to {video_path}")
                 else:
-                    print("[WARNING] Could not format any valid RGB frames for video encoding.")
+                    print("[WARNING] Could not format any valid RGB frames for GIF encoding.")
             else:
                 print("[WARNING] No video frames were captured during rollout.")
 
@@ -335,6 +345,18 @@ def main():
     # Sync metrics and video to WandB if wandb_run_id is provided
     if args.wandb_run_id:
         print(f"[INFO] Connecting to WandB run {args.wandb_run_id} ({args.entity}/{args.project})...")
+        tokens = env_name.split("|")
+        hand_name = dex_args.hand if hasattr(dex_args, "hand") else (tokens[1] if len(tokens) > 1 else "unknown_hand")
+        clip_name = dex_args.clip if hasattr(dex_args, "clip") else (tokens[2] if len(tokens) > 2 else "unknown_clip")
+
+        UniversalLogger.install(
+            algo="fasttd3",
+            hand=str(hand_name),
+            clip=str(clip_name),
+            seed=int(saved_args.get("seed", 0)),
+            num_envs=int(args.num_envs),
+        )
+
         wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
 
         log_payload = {
@@ -373,14 +395,14 @@ def main():
         if last_video_path and os.path.exists(last_video_path):
             cap_text = f"Checkpoint Step: {args.step}" if args.step is not None else "Eval Video"
             fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
-            log_payload["eval_video"] = wandb.Video(last_video_path, fps=fps, format="mp4", caption=cap_text)
-            print(f"[INFO] Attached video {last_video_path} to WandB payload.")
+            log_payload["eval/video"] = wandb.Video(last_video_path, fps=fps, format="gif", caption=cap_text)
+            print(f"[INFO] Attached GIF {last_video_path} to WandB payload.")
 
         if args.step is not None:
-            log_payload["checkpoint_step"] = args.step
+            log_payload["global/env_step"] = args.step
 
         if log_payload:
-            wandb.log(log_payload)
+            wandb.log(log_payload, step=args.step)
             print(f"[SUCCESS] Logged evaluation payload to WandB: {list(log_payload.keys())}")
 
         wandb.finish()

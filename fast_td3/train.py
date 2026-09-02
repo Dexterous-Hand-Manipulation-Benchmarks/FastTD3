@@ -938,17 +938,19 @@ def main():
                             fps=30,
                             format="gif",
                         )
-                        logs["render_video"] = render_video
+                        logs["eval/video"] = render_video
                 if args.use_wandb:
+                    env_step = global_step * args.num_envs
                     wandb.log(
                         {
+                            "global/env_step": env_step,
                             "speed": speed,
-                            "frame": global_step * args.num_envs,
+                            "frame": env_step,
                             "critic_lr": q_scheduler.get_last_lr()[0],
                             "actor_lr": actor_scheduler.get_last_lr()[0],
                             **logs,
                         },
-                        step=global_step,
+                        step=env_step,
                     )
 
             if (
