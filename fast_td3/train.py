@@ -785,6 +785,7 @@ def main():
     desc = ""
     current_epoch = -1
     latest_episode_info = {}
+    best_eval_score = -float("inf")
 
     while global_step < args.total_timesteps:
         if hasattr(envs, "env") and hasattr(envs.env, "set_curriculum"):
@@ -932,6 +933,28 @@ def main():
                             obs = envs.reset()
                         logs.update(eval_metrics)
 
+                        # Track and save best checkpoint based on eval score
+                        current_score = eval_metrics.get(
+                            "eval/success_2cm",
+                            eval_metrics.get("eval/success_5cm", eval_metrics.get("eval_avg_return", -float("inf"))),
+                        )
+                        if current_score > best_eval_score:
+                            best_eval_score = current_score
+                            best_ckpt_path = f"{checkpoint_dir}/best.pt"
+                            print(
+                                f"[INFO] New best eval score ({best_eval_score:.4f}) at step {global_step}! Saving to: {best_ckpt_path}"
+                            )
+                            save_params(
+                                global_step,
+                                actor,
+                                qnet,
+                                qnet_target,
+                                obs_normalizer,
+                                critic_obs_normalizer,
+                                args,
+                                best_ckpt_path,
+                            )
+
                     if (
                             args.render_interval > 0
                             and global_step % args.render_interval == 0
@@ -998,6 +1021,19 @@ def main():
         args,
         final_ckpt_path,
     )
+
+    best_ckpt_path = f"{checkpoint_dir}/best.pt"
+    if not os.path.exists(best_ckpt_path):
+        save_params(
+            global_step,
+            actor,
+            qnet,
+            qnet_target,
+            obs_normalizer,
+            critic_obs_normalizer,
+            args,
+            best_ckpt_path,
+        )
 
 
 if __name__ == "__main__":

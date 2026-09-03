@@ -18,9 +18,11 @@ for p in [base_dir, fast_td3_dir, dexmachina_dir, logging_dir, os.path.dirname(_
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import math
 from wandb_logger import UniversalLogger
 from fast_td3.hyperparams import DexMachinaArgs
-from fast_td3.fast_td3 import Actor
+from fast_td3.fast_td3 import Actor as FastTD3Actor
+from fast_td3.fast_td3_simbav2 import Actor as SimbaActor
 from fast_td3.fast_td3_utils import EmpiricalNormalization
 from dexmachina_wrapper import GenesisFastTD3Wrapper
 from dexmachina.envs.constructors import get_all_env_cfg
@@ -163,20 +165,40 @@ def main():
     sim_dimension = saved_args.get("sim_dimension", 64)
     seq_len = saved_args.get("seq_len", 8)
 
-    # Initialize models
-    actor = Actor(
-        n_obs=n_obs,
-        n_act=n_act,
-        num_envs=args.num_envs,
-        init_scale=init_scale,
-        hidden_dim=actor_hidden_dim,
-        std_min=std_min,
-        std_max=std_max,
-        sim_type=sim_type,
-        sim_dimension=sim_dimension,
-        seq_len=seq_len,
-        device=device,
-    ).to(device)
+    # Initialize models based on saved agent type
+    agent_type = saved_args.get("agent", "fasttd3")
+    if agent_type == "fasttd3_simbav2":
+        actor_num_blocks = saved_args.get("actor_num_blocks", 1)
+        actor = SimbaActor(
+            n_obs=n_obs,
+            n_act=n_act,
+            num_envs=args.num_envs,
+            hidden_dim=actor_hidden_dim,
+            scaler_init=math.sqrt(2.0 / actor_hidden_dim),
+            scaler_scale=math.sqrt(2.0 / actor_hidden_dim),
+            alpha_init=1.0 / (actor_num_blocks + 1),
+            alpha_scale=1.0 / math.sqrt(actor_hidden_dim),
+            expansion=4,
+            c_shift=3.0,
+            num_blocks=actor_num_blocks,
+            std_min=std_min,
+            std_max=std_max,
+            device=device,
+        ).to(device)
+    else:
+        actor = FastTD3Actor(
+            n_obs=n_obs,
+            n_act=n_act,
+            num_envs=args.num_envs,
+            init_scale=init_scale,
+            hidden_dim=actor_hidden_dim,
+            std_min=std_min,
+            std_max=std_max,
+            sim_type=sim_type,
+            sim_dimension=sim_dimension,
+            seq_len=seq_len,
+            device=device,
+        ).to(device)
     obs_normalizer = EmpiricalNormalization(shape=n_obs, device=device)
     
     # Manually remove noise_scales before load_state_dict to support changing num_envs during eval
@@ -393,19 +415,51 @@ def main():
             except Exception as e:
                 pass
 
+        # Determine effective step from checkpoint metadata if not explicitly provided
+        saved_step = checkpoint.get("global_step", 0)
+        training_num_envs = int(saved_args.get("num_envs", 768))
+        ckpt_env_step = saved_step * training_num_envs
+        effective_step = args.step if args.step is not None else ckpt_env_step
+
+        is_best = (ckpt_name == "best") or (args.step is None and os.path.basename(args.checkpoint).startswith("best"))
+        fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
+
         if last_video_path and os.path.exists(last_video_path):
-            cap_text = f"Checkpoint Step: {args.step}" if args.step is not None else "Eval Video"
-            fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
+            cap_text = f"Checkpoint Step: {effective_step}" if effective_step is not None else "Eval Video"
             log_payload["media/eval_video"] = wandb.Video(last_video_path, fps=fps, format="gif", caption=cap_text)
             print(f"[INFO] Attached GIF {last_video_path} to WandB payload.")
 
-        if args.step is not None:
-            log_payload["global/step"] = args.step
-            log_payload["global/env_step"] = args.step
+        # Log as best/* metrics and summary if evaluating the best model
+        if is_best:
+            log_payload["best/return"] = ep_return
+            log_payload["best/step"] = effective_step
+            log_payload["best/global_step"] = saved_step
+            if "eval/auc_add" in log_payload:
+                log_payload["best/auc_add"] = log_payload["eval/auc_add"]
+            if "eval/add" in log_payload:
+                log_payload["best/add"] = log_payload["eval/add"]
+            if "eval/success_2cm" in log_payload:
+                log_payload["best/success_2cm"] = log_payload["eval/success_2cm"]
+            if "eval/success_5cm" in log_payload:
+                log_payload["best/success_5cm"] = log_payload["eval/success_5cm"]
+            if last_video_path and os.path.exists(last_video_path):
+                log_payload["media/best_video"] = wandb.Video(
+                    last_video_path, fps=fps, format="gif", caption=f"Best Model (Env Step: {effective_step})"
+                )
+
+            # Update WandB run summary for clear table visualization
+            for k in ["best/return", "best/step", "best/global_step", "best/auc_add", "best/add", "best/success_2cm", "best/success_5cm"]:
+                if k in log_payload:
+                    wandb.run.summary[k] = log_payload[k]
+            print(f"[INFO] Updated WandB run summary with best/* metrics: step {effective_step}")
+
+        if effective_step is not None:
+            log_payload["global/step"] = effective_step
+            log_payload["global/env_step"] = effective_step
 
         if log_payload:
-            wandb.log(log_payload, step=args.step)
-            print(f"[SUCCESS] Logged evaluation payload to WandB: {list(log_payload.keys())}")
+            wandb.log(log_payload, step=effective_step)
+            print(f"[SUCCESS] Logged evaluation payload to WandB (Step {effective_step}): {list(log_payload.keys())}")
 
         wandb.finish()
 
