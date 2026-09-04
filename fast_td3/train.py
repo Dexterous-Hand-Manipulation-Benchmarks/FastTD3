@@ -897,11 +897,14 @@ def main():
 
                 soft_update(qnet, qnet_target, args.tau)
 
+            logs = {}
+            env_step = global_step * args.num_envs
+
             if global_step % 100 == 0 and start_time is not None:
                 speed = (global_step - measure_burnin) / (time.time() - start_time)
                 progress.update(pbar, description=f"[cyan]{speed: 4.4f} sps, " + desc)
                 with torch.no_grad():
-                    logs = {
+                    logs.update({
                         "actor_loss": logs_dict["actor_loss"].mean(),
                         "qf_loss": logs_dict["qf_loss"].mean(),
                         "qf_max": logs_dict["qf_max"].mean(),
@@ -910,7 +913,10 @@ def main():
                         "critic_grad_norm": logs_dict["critic_grad_norm"].mean(),
                         "env_rewards": rewards.mean(),
                         "buffer_rewards": raw_rewards.mean(),
-                    }
+                        "speed": speed,
+                        "critic_lr": q_scheduler.get_last_lr()[0],
+                        "actor_lr": actor_scheduler.get_last_lr()[0],
+                    })
 
                     for k, v in latest_episode_info.items():
                         clean_k = k if k.startswith("env/") else f"env/{k}"
@@ -925,64 +931,65 @@ def main():
                     if current_epoch >= 0:
                         logs["env/curriculum_epoch"] = current_epoch
 
-                    if args.eval_interval > 0 and global_step % args.eval_interval == 0:
-                        print(f"Evaluating at global step {global_step}")
-                        eval_metrics = evaluate()
-                        if env_type in ["humanoid_bench", "isaaclab", "mtbench"]:
-                            # NOTE: Hacky way of evaluating performance, but just works
-                            obs = envs.reset()
-                        logs.update(eval_metrics)
+            # Independent Evaluation Interval
+            if args.eval_interval > 0 and global_step > 0 and global_step % args.eval_interval == 0:
+                print(f"[INFO] Evaluating at global step {global_step} (Env Step: {env_step})...")
+                eval_metrics = evaluate()
+                if env_type in ["humanoid_bench", "isaaclab", "mtbench"]:
+                    # NOTE: Hacky way of evaluating performance, but just works
+                    obs = envs.reset()
+                logs.update(eval_metrics)
 
-                        # Track and save best checkpoint based on eval score
-                        current_score = eval_metrics.get(
-                            "eval/success_2cm",
-                            eval_metrics.get("eval/success_5cm", eval_metrics.get("eval_avg_return", -float("inf"))),
-                        )
-                        if current_score > best_eval_score:
-                            best_eval_score = current_score
-                            best_ckpt_path = f"{checkpoint_dir}/best.pt"
-                            print(
-                                f"[INFO] New best eval score ({best_eval_score:.4f}) at step {global_step}! Saving to: {best_ckpt_path}"
-                            )
-                            save_params(
-                                global_step,
-                                actor,
-                                qnet,
-                                qnet_target,
-                                obs_normalizer,
-                                critic_obs_normalizer,
-                                args,
-                                best_ckpt_path,
-                            )
-
-                    if (
-                            args.render_interval > 0
-                            and global_step % args.render_interval == 0
-                    ):
-                        renders = render_with_rollout()
-                        render_video = wandb.Video(
-                            np.array(renders).transpose(
-                                0, 3, 1, 2
-                            ),  # Convert to (T, C, H, W) format
-                            fps=30,
-                            format="gif",
-                            caption=f"Training Rollout (Env Step: {global_step * args.num_envs})",
-                        )
-                        logs["media/train_video"] = render_video
-                if args.use_wandb:
-                    env_step = global_step * args.num_envs
-                    wandb.log(
-                        {
-                            "global/step": env_step,
-                            "global/env_step": env_step,
-                            "speed": speed,
-                            "frame": env_step,
-                            "critic_lr": q_scheduler.get_last_lr()[0],
-                            "actor_lr": actor_scheduler.get_last_lr()[0],
-                            **logs,
-                        },
-                        step=env_step,
+                # Track and save best checkpoint based on eval score
+                current_score = eval_metrics.get(
+                    "eval/success_2cm",
+                    eval_metrics.get("eval/success_5cm", eval_metrics.get("eval_avg_return", -float("inf"))),
+                )
+                if current_score > best_eval_score:
+                    best_eval_score = current_score
+                    best_ckpt_path = f"{checkpoint_dir}/best.pt"
+                    print(
+                        f"[INFO] New best eval score ({best_eval_score:.4f}) at step {global_step}! Saving to: {best_ckpt_path}"
                     )
+                    save_params(
+                        global_step,
+                        actor,
+                        qnet,
+                        qnet_target,
+                        obs_normalizer,
+                        critic_obs_normalizer,
+                        args,
+                        best_ckpt_path,
+                    )
+
+            # Independent Render Interval
+            if (
+                args.render_interval > 0
+                and global_step > 0
+                and global_step % args.render_interval == 0
+            ):
+                print(f"[INFO] Rendering training rollout at global step {global_step} (Env Step: {env_step})...")
+                renders = render_with_rollout()
+                render_video = wandb.Video(
+                    np.array(renders).transpose(
+                        0, 3, 1, 2
+                    ),  # Convert to (T, C, H, W) format
+                    fps=30,
+                    format="gif",
+                    caption=f"Training Rollout (Env Step: {env_step})",
+                )
+                logs["media/train_video"] = render_video
+
+            if args.use_wandb and len(logs) > 0:
+                wandb.log(
+                    {
+                        "global/step": env_step,
+                        "global/env_step": env_step,
+                        "frame": env_step,
+                        **logs,
+                    },
+                    step=env_step,
+                )
 
             if (
                     args.save_interval > 0

@@ -421,7 +421,7 @@ def main():
         ckpt_env_step = saved_step * training_num_envs
         effective_step = args.step if args.step is not None else ckpt_env_step
 
-        is_best = (ckpt_name == "best") or (args.step is None and os.path.basename(args.checkpoint).startswith("best"))
+        is_best = (ckpt_name == "best") or os.path.basename(args.checkpoint).startswith("best")
         fps = int(1.0 / uenv.dt / 2) if hasattr(uenv, "dt") and uenv.dt > 0 else 30
 
         if last_video_path and os.path.exists(last_video_path):
