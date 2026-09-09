@@ -378,6 +378,7 @@ def main():
             seed=int(saved_args.get("seed", 0)),
             num_train_envs=training_num_envs,
             num_eval_envs=int(args.num_envs),
+            is_eval=True,
         )
 
         wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
@@ -459,7 +460,7 @@ def main():
 
         if log_payload:
             wandb.log(log_payload)
-            print(f"[SUCCESS] Logged evaluation payload to WandB (Step {effective_step}): {list(log_payload.keys())}")
+            print(f"[SUCCESS] Logged evaluation payload to WandB (Env Step {effective_step}): {list(log_payload.keys())}")
 
         wandb.finish()
 
