@@ -458,7 +458,7 @@ def main():
             log_payload["global/env_step"] = effective_step
 
         if log_payload:
-            wandb.log(log_payload, step=effective_step)
+            wandb.log(log_payload)
             print(f"[SUCCESS] Logged evaluation payload to WandB (Step {effective_step}): {list(log_payload.keys())}")
 
         wandb.finish()
