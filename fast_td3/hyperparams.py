@@ -27,8 +27,8 @@ class BaseArgs:
     """the project name"""
     group_name: str = "FastTD3"
     """the wandb group name"""
-    entity: str = "schrapsi-kit"
-    """the wandb entity/team name"""
+    entity: str = None
+    """the wandb entity/team name (default: $WANDB_ENTITY or your W&B default)"""
     use_wandb: bool = True
     """whether to use wandb"""
     checkpoint_path: str = None

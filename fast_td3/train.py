@@ -40,15 +40,10 @@ from torch.amp import autocast, GradScaler
 
 from tensordict import TensorDict
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
-LOGGING_DIR = os.path.join(PROJECT_ROOT, "logging")
-ENVS_FASTTD3_DIR = os.path.join(PROJECT_ROOT, "envs", "FastTD3")
-for p in [LOGGING_DIR, PROJECT_ROOT, ENVS_FASTTD3_DIR, SCRIPT_DIR]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-from wandb_logger import UniversalLogger
+try:  # unified W&B logging when run from the dexhand-bench umbrella repo
+    from dexhand_bench.wandb_logger import UniversalLogger
+except ImportError:
+    UniversalLogger = None
 
 from fast_td3_utils import (
     EmpiricalNormalization,
@@ -81,14 +76,15 @@ def main():
     clip_name = getattr(args, "clip", tokens[2] if len(tokens) > 2 else "unknown_clip")
 
     eval_num = min(getattr(args, "num_eval_envs", 32), 32)
-    UniversalLogger.install(
-        algo="fast_td3",
-        hand=str(hand_name),
-        clip=str(clip_name),
-        seed=int(args.seed),
-        num_train_envs=int(args.num_envs),
-        num_eval_envs=int(eval_num),
-    )
+    if UniversalLogger is not None:
+        UniversalLogger.install(
+            algo="fast_td3",
+            hand=str(hand_name),
+            clip=str(clip_name),
+            seed=int(args.seed),
+            num_train_envs=int(args.num_envs),
+            num_eval_envs=int(eval_num),
+        )
     # -----------------------------------
 
     amp_enabled = args.amp and args.cuda and torch.cuda.is_available()
@@ -163,50 +159,18 @@ def main():
         # ... existing HumanoidBench/IsaacLab env setup ...
 
     elif args.env_name.startswith("dexmachina"):
-        import sys
-        import os
-
-        # 1. Add specific package paths to avoid folder name confusion
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
-        genesis_path = os.path.join(repo_root, 'genesis')
-        dexmachina_path = os.path.join(repo_root, 'dexmachina')
-
-        # Add root so it can find the 'envs' folder
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-
-        # Add specific paths so it finds the real 'genesis' and 'dexmachina' modules
-        if genesis_path not in sys.path:
-            sys.path.insert(0, genesis_path)
-        if dexmachina_path not in sys.path:
-            sys.path.insert(0, dexmachina_path)
-
-        # 2. Now initialize Genesis correctly
         import genesis as gs
         gs.init(backend=gs.gpu, logging_level="warning")
 
-        # 3. Import Dexmachina and Wrapper
-        from envs.FastTD3.dexmachina_wrapper import GenesisFastTD3Wrapper
+        from environments.dexmachina_env import GenesisFastTD3Wrapper, apply_dexmachina_env_name
         from dexmachina.envs.constructors import get_all_env_cfg
         from dexmachina.envs import BaseEnv
 
-        # Parse the string (e.g., "dexmachina|allegro_hand|box-30-230")
-        parts = args.env_name.split("|")
-        hand_name = parts[1] if len(parts) > 1 else "allegro_hand"
-        clip_name = parts[2] if len(parts) > 2 else "box-30-230"
+        # Parse "dexmachina|<hand>|<clip>" into args.hand / args.clip
+        hand_name, clip_name = apply_dexmachina_env_name(args)
 
         # FastTD3 uses device_rank instead of device
         sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
-
-        # Set values from env_name
-        args.hand = hand_name
-        args.clip = clip_name
-
-        # Handle 'None' defaults that tyro doesn't parse cleanly
-        if args.n_envs_per_row == 0:
-            args.n_envs_per_row = None
-        if args.color_object == "":
-            args.color_object = None
 
         dex_args = args
 

@@ -2,6 +2,26 @@ import torch
 import numpy as np
 
 
+def apply_dexmachina_env_name(args):
+    """Parse ``args.env_name`` ("dexmachina|<hand>|<clip>") into ``args.hand`` / ``args.clip``.
+
+    Also maps tyro-friendly defaults back to the ``None`` values dexmachina expects.
+    Returns ``(hand_name, clip_name)``.
+    """
+    parts = args.env_name.split("|")
+    hand_name = parts[1] if len(parts) > 1 else "allegro_hand"
+    clip_name = parts[2] if len(parts) > 2 else "box-30-230"
+    args.hand = hand_name
+    args.clip = clip_name
+
+    # Handle 'None' defaults that tyro doesn't parse cleanly
+    if args.n_envs_per_row == 0:
+        args.n_envs_per_row = None
+    if args.color_object == "":
+        args.color_object = None
+    return hand_name, clip_name
+
+
 class GenesisFastTD3Wrapper:
     """
     Wraps Dexmachina's BaseEnv to be natively compatible with FastTD3.

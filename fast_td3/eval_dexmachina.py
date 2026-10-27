@@ -9,22 +9,17 @@ import torch
 import wandb
 import genesis as gs
 
-# Ensure FastTD3, logging, and dexmachina packages can be imported
-base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-fast_td3_dir = os.path.join(base_dir, "FastTD3")
-dexmachina_dir = os.path.join(base_dir, "dexmachina")
-logging_dir = os.path.join(base_dir, "logging")
-for p in [base_dir, fast_td3_dir, dexmachina_dir, logging_dir, os.path.dirname(__file__)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 import math
-from wandb_logger import UniversalLogger
+try:  # unified W&B logging when run from the dexhand-bench umbrella repo
+    from dexhand_bench.wandb_logger import UniversalLogger
+except ImportError:
+    UniversalLogger = None
 from fast_td3.hyperparams import DexMachinaArgs
 from fast_td3.fast_td3 import Actor as FastTD3Actor
 from fast_td3.fast_td3_simbav2 import Actor as SimbaActor
 from fast_td3.fast_td3_utils import EmpiricalNormalization
-from dexmachina_wrapper import GenesisFastTD3Wrapper
+from fast_td3.environments.dexmachina_env import GenesisFastTD3Wrapper
 from dexmachina.envs.constructors import get_all_env_cfg
 from dexmachina.envs.base_env import BaseEnv
 
@@ -88,7 +83,7 @@ def main():
     parser.add_argument('--wandb_run_id', type=str, default=None, help='WandB run ID to attach evaluation videos and metrics to')
     parser.add_argument('--step', type=int, default=None, help='The exact checkpoint step')
     parser.add_argument('--project', type=str, default='dexmachina', help='WandB project name')
-    parser.add_argument('--entity', type=str, default='schrapsi-kit', help='WandB entity/team name')
+    parser.add_argument('--entity', type=str, default=None, help='WandB entity/team name (default: $WANDB_ENTITY)')
     args = parser.parse_args()
 
     # Load checkpoint
@@ -371,15 +366,16 @@ def main():
         hand_name = dex_args.hand if hasattr(dex_args, "hand") else (tokens[1] if len(tokens) > 1 else "unknown_hand")
         clip_name = dex_args.clip if hasattr(dex_args, "clip") else (tokens[2] if len(tokens) > 2 else "unknown_clip")
         training_num_envs = int(saved_args.get("num_envs", 768))
-        UniversalLogger.install(
-            algo="fast_td3",
-            hand=str(hand_name),
-            clip=str(clip_name),
-            seed=int(saved_args.get("seed", 0)),
-            num_train_envs=training_num_envs,
-            num_eval_envs=int(args.num_envs),
-            is_eval=True,
-        )
+        if UniversalLogger is not None:
+            UniversalLogger.install(
+                algo="fast_td3",
+                hand=str(hand_name),
+                clip=str(clip_name),
+                seed=int(saved_args.get("seed", 0)),
+                num_train_envs=training_num_envs,
+                num_eval_envs=int(args.num_envs),
+                is_eval=True,
+            )
 
         wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
 
