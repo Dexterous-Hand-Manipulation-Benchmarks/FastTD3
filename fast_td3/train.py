@@ -63,6 +63,12 @@ except ImportError:
     pass
 
 
+def seed_rngs(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def main():
     args = get_args()
     print(args)
@@ -110,9 +116,7 @@ def main():
             wandb_kwargs["group"] = args.group_name
         wandb.init(**wandb_kwargs)
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    seed_rngs(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     if not args.cuda:
@@ -229,6 +233,10 @@ def main():
 
         except AttributeError as e:
             print(f"[WARNING] Could not find reward config to log: {e}")
+
+        # Building a DexMachina env reseeds numpy/torch with a fixed seed (curriculum, ADD vertex sampling),
+        # so seed again before the agent is built and samples.
+        seed_rngs(args.seed)
 
     else:
         from environments.mujoco_playground_env import make_env
