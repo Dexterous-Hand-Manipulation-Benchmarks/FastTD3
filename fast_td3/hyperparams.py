@@ -538,3 +538,5 @@ class IsaacReposeCubeShadowDirectArgs(IsaacLabArgs):
 class DexMachinaArgs(BaseArgs):
     """DexMachina env settings are not arguments: they come from the shared benchmark task in dexmachina
     (`dexmachina.envs.benchmark_task`); a run chooses hand and clip through env_name, plus seed and num_envs."""
+
+    render_interval: int = 0  # no rendering during training: it needs a display or EGL

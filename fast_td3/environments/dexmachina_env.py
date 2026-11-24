@@ -1,7 +1,6 @@
 from dataclasses import dataclass, replace
 
 import torch
-import numpy as np
 
 from dexmachina.envs.base_env import BaseEnv
 from dexmachina.envs.benchmark_task import RunChoices, benchmark_spec
@@ -49,26 +48,16 @@ def eval_env_kwargs(spec: EnvSpec, device: str) -> dict:
 class DexMachinaEnvs:
     train: "GenesisFastTD3Wrapper"
     evaluation: "GenesisFastTD3Wrapper"
-    render: "GenesisFastTD3Wrapper"
 
 
 def build_dexmachina_envs(spec: EnvSpec, device: str, num_eval_envs: int) -> DexMachinaEnvs:
-    """Training env on the spec, plus evaluation and single-env render envs on the same task."""
+    """Training env on the spec, plus an evaluation env on the same task."""
     train = GenesisFastTD3Wrapper(DexMachinaVecEnv.from_spec(spec, device, reward_overrides={}), rl_device=device)
     eval_spec = replace(spec, num_envs=min(num_eval_envs, MAX_EVAL_ENVS))
     eval_env = GenesisFastTD3Wrapper(
         DexMachinaVecEnv(BaseEnv(**eval_env_kwargs(eval_spec, device))), rl_device=device
     )
-    render_spec = replace(spec, num_envs=1, record_video=True)
-    render = GenesisFastTD3Wrapper(
-        DexMachinaVecEnv(BaseEnv(**eval_env_kwargs(render_spec, device))), rl_device=device
-    )
-    if render.base_env._floating_camera is None:
-        raise RuntimeError(
-            "The DexMachina render env was built without a camera, so rendered videos would be black. "
-            "It is built with record_video=True; check how get_all_env_cfg sets up the camera."
-        )
-    return DexMachinaEnvs(train=train, evaluation=eval_env, render=render)
+    return DexMachinaEnvs(train=train, evaluation=eval_env)
 
 
 def advance_curriculum(envs: "GenesisFastTD3Wrapper", global_step: int, total_timesteps: int, current_epoch: int) -> int:
@@ -168,46 +157,6 @@ class GenesisFastTD3Wrapper:
                 infos["arti_dist"] = arti_dist
 
         return obs, rew, dones, infos
-
-    def render(self):
-        """
-        Renders the environment using Dexmachina's natively initialized floating camera.
-        """
-        if self.base_env._floating_camera is not None:
-            try:
-                # Force Genesis to render the frame
-                render_out = self.base_env._floating_camera.render()
-                image = render_out[0] if isinstance(render_out, tuple) else render_out
-
-                # Move tensor to CPU numpy array
-                if isinstance(image, torch.Tensor):
-                    image = image.cpu().numpy()
-
-                # Drop the alpha channel (RGBA -> RGB) for WandB compatibility
-                if image.shape[-1] == 4:
-                    image = image[..., :3]
-
-                # Ensure uint8
-                if image.dtype != np.uint8:
-                    if image.max() <= 1.01:
-                        image = image * 255.0
-                    image = np.clip(image, 0, 255).astype(np.uint8)
-
-                # Add batch dimension (Batch, Height, Width, Channels)
-                if image.ndim == 3:
-                    image = image[np.newaxis, ...]
-
-                return image
-            except Exception as e:
-                print(f"[DEBUG] Camera rendering failed: {e}")
-        else:
-            # Only print once to avoid spamming the console
-            if not hasattr(self, "_camera_warning_printed"):
-                print("[DEBUG] self.base_env._floating_camera is missing: the env was built without record_video.")
-                self._camera_warning_printed = True
-
-        # Ultimate Fallback (Dexmachina cameras default to 160x160 resolution)
-        return np.zeros((1, 160, 160, 3), dtype=np.uint8)
 
     def close(self):
         self.vec_env.close()

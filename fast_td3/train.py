@@ -165,6 +165,11 @@ def main():
         # ... existing HumanoidBench/IsaacLab env setup ...
 
     elif args.env_name.startswith("dexmachina"):
+        if args.render_interval > 0:
+            raise ValueError(
+                f"--render_interval is {args.render_interval}, but FastTD3 does not render DexMachina envs during "
+                "training. Pass --render_interval 0 (the DexMachina default)."
+            )
         import genesis as gs
         gs.init(backend=gs.gpu, logging_level="warning")
 
@@ -177,7 +182,7 @@ def main():
         env_spec = benchmark_env_spec(args.env_name, args.seed, args.num_envs)
         print(f"[INFO] Building Dexmachina envs: {env_spec.hand} / {env_spec.clip}")
         dex_envs = build_dexmachina_envs(env_spec, sim_device, args.num_eval_envs)
-        envs, eval_envs, render_env = dex_envs.train, dex_envs.evaluation, dex_envs.render
+        envs, eval_envs = dex_envs.train, dex_envs.evaluation
         env_type = "dexmachina"
         # Evaluation rebuilds the env the checkpoints next to it were trained on from this file.
         save_run_spec(Path(checkpoint_dir), env_spec, envs.vec_env.reward_overrides)
@@ -482,15 +487,6 @@ def main():
             raise NotImplementedError(
                 "We don't support rendering for IsaacLab and MTBench environments"
             )
-        elif env_type == "dexmachina":
-            # 1. Reset the environment and safely capture the initial observation (obs)
-            reset_out = render_env.reset()
-            obs = reset_out[0] if isinstance(reset_out, tuple) else reset_out
-            # 2. Grab the first RGB frame from the floating camera
-            base = render_env.base_env
-            render_out = base._floating_camera.render()
-            frame = render_out[0] if isinstance(render_out, tuple) else render_out
-            renders = [frame]
         else:
             obs = render_env.reset()
             render_env.state.info["command"] = jnp.array([[1.0, 0.0, 0.0]])
@@ -513,12 +509,6 @@ def main():
             if i % 2 == 0:
                 if env_type == "humanoid_bench":
                     renders.append(render_env.render())
-                elif env_type == "dexmachina":
-                    # Capture subsequent frames during the rollout
-                    base = render_env.base_env
-                    render_out = base._floating_camera.render()
-                    frame = render_out[0] if isinstance(render_out, tuple) else render_out
-                    renders.append(frame)
                 else:
                     renders.append(render_env.state)
 
