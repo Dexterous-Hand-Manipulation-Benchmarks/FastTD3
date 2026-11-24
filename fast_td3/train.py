@@ -14,6 +14,7 @@ import json
 import random
 import time
 import math
+from pathlib import Path
 
 # Changed: Imported specific columns to customize the progress bar
 from rich.progress import (
@@ -169,6 +170,7 @@ def main():
 
         from environments.dexmachina_env import advance_curriculum, benchmark_env_spec, build_dexmachina_envs
         from dexmachina.envs.factory import task_hash
+        from dexmachina.envs.run_spec import save_run_spec
 
         # FastTD3 uses device_rank instead of device
         sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
@@ -177,6 +179,8 @@ def main():
         dex_envs = build_dexmachina_envs(env_spec, sim_device, args.num_eval_envs)
         envs, eval_envs, render_env = dex_envs.train, dex_envs.evaluation, dex_envs.render
         env_type = "dexmachina"
+        # Evaluation rebuilds the env the checkpoints next to it were trained on from this file.
+        save_run_spec(Path(checkpoint_dir), env_spec, envs.vec_env.reward_overrides)
 
         if args.use_wandb:
             wandb.config.update(
