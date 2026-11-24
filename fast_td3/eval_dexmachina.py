@@ -11,6 +11,8 @@ import genesis as gs
 
 
 import math
+from dataclasses import replace
+
 try:  # unified W&B logging when run from the dexhand-bench umbrella repo
     from dexhand_bench.wandb_logger import UniversalLogger
 except ImportError:
@@ -19,9 +21,15 @@ from fast_td3.hyperparams import DexMachinaArgs
 from fast_td3.fast_td3 import Actor as FastTD3Actor
 from fast_td3.fast_td3_simbav2 import Actor as SimbaActor
 from fast_td3.fast_td3_utils import EmpiricalNormalization
-from fast_td3.environments.dexmachina_env import GenesisFastTD3Wrapper
-from dexmachina.envs.constructors import get_all_env_cfg
+from fast_td3.environments.dexmachina_env import (
+    GenesisFastTD3Wrapper,
+    benchmark_env_spec,
+    eval_env_kwargs,
+    parse_env_name,
+)
 from dexmachina.envs.base_env import BaseEnv
+from dexmachina.envs.factory import task_hash
+from dexmachina.envs.vec_env import DexMachinaVecEnv
 
 
 def gather_object_state_tensor(demo_data):
@@ -102,30 +110,24 @@ def main():
     env_name = args.env_name or saved_args.get("env_name", "dexmachina|allegro_hand|box-30-230")
     print(f"[INFO] Environment: {env_name} | Eval Envs: {args.num_envs}")
 
-    # Initialize environment config
-    dex_args = DexMachinaArgs(env_name=env_name, num_envs=args.num_envs)
-    parts = dex_args.env_name.split("|")
-    dex_args.hand = parts[1] if len(parts) > 1 else "allegro_hand"
-    dex_args.clip = parts[2] if len(parts) > 2 else "box-30-230"
-    if hasattr(dex_args, "n_envs_per_row") and dex_args.n_envs_per_row == 0:
-        dex_args.n_envs_per_row = None
-    if hasattr(dex_args, "color_object") and dex_args.color_object == "":
-        dex_args.color_object = None
-    
+    if "seed" not in saved_args:
+        raise ValueError(
+            f"Checkpoint {args.checkpoint} has no 'seed' in its saved args, so the run it belongs to is unknown. "
+            "Evaluate a checkpoint written by FastTD3's train.py, which saves its args."
+        )
+    run_seed = int(saved_args["seed"])
+    hand_name, clip_name = parse_env_name(env_name)
+    defaults = DexMachinaArgs()
+
+    # The training task, evaluated without early resets, randomization, assistance or curriculum.
+    env_spec = replace(benchmark_env_spec(env_name, run_seed, args.num_envs), record_video=args.record_video)
+    eval_task_hash = task_hash(env_spec)
+    print(f"[INFO] Task hash: {eval_task_hash}")
+
     gs.init(backend=gs.gpu, logging_level='warning')
-    env_kwargs = get_all_env_cfg(dex_args, device=str(device))
-    
-    # Force eval settings
-    env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
-    env_kwargs['env_cfg']['is_eval'] = True
-    env_kwargs['rand_cfg']['randomize'] = False
-    env_kwargs['env_cfg']['num_envs'] = args.num_envs
-    env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
-    
+    env_kwargs = eval_env_kwargs(env_spec, str(device))
+
     if args.record_video:
-        env_kwargs['env_cfg']['scene_kwargs']['use_visualizer'] = True  
-        env_kwargs['env_cfg']['scene_kwargs']['show_viewer'] = False
-        env_kwargs['env_cfg']['record_video'] = True 
         env_kwargs['env_cfg']['render_segmentation'] = False 
         if 'camera_kwargs' not in env_kwargs['env_cfg']:
             env_kwargs['env_cfg']['camera_kwargs'] = {}
@@ -136,15 +138,9 @@ def main():
             lookat=(0.0, -1.58, 2.0),
         )
     
-    for name, cfg in env_kwargs['object_cfgs'].items():
-        cfg['actuated'] = False
-        
-    env_kwargs.pop("curriculum_cfg", None)
-    
     # Create env
-    base_env = BaseEnv(**env_kwargs)
-    env = GenesisFastTD3Wrapper(base_env, rl_device=str(device))
-    uenv = env.env
+    env = GenesisFastTD3Wrapper(DexMachinaVecEnv(BaseEnv(**env_kwargs)), rl_device=str(device))
+    uenv = env.base_env
     
     demo_data = env_kwargs['demo_data']
     obj_state_tensor = gather_object_state_tensor(demo_data).to(device)
@@ -152,10 +148,10 @@ def main():
     n_act = env.num_actions
     n_obs = env.num_obs if isinstance(env.num_obs, int) else env.num_obs[0]
     
-    actor_hidden_dim = saved_args.get("actor_hidden_dim", dex_args.actor_hidden_dim)
-    init_scale = saved_args.get("init_scale", dex_args.init_scale)
-    std_min = saved_args.get("std_min", dex_args.std_min)
-    std_max = saved_args.get("std_max", dex_args.std_max)
+    actor_hidden_dim = saved_args.get("actor_hidden_dim", defaults.actor_hidden_dim)
+    init_scale = saved_args.get("init_scale", defaults.init_scale)
+    std_min = saved_args.get("std_min", defaults.std_min)
+    std_max = saved_args.get("std_max", defaults.std_max)
     sim_type = saved_args.get("sim_type", "")
     sim_dimension = saved_args.get("sim_dimension", 64)
     seq_len = saved_args.get("seq_len", 8)
@@ -222,10 +218,11 @@ def main():
     # Save config.yaml so dexmachina evaluation scripts (compute_add.py, group_results.py) can parse metadata
     config_yaml_path = os.path.join(out_dir, "config.yaml")
     config_payload = {
-        "clip": dex_args.clip,
-        "hand": dex_args.hand,
+        "clip": clip_name,
+        "hand": hand_name,
         "env_name": env_name,
         "num_envs": args.num_envs,
+        "task_hash": eval_task_hash,
     }
     with open(config_yaml_path, "w") as f:
         yaml.dump(config_payload, f, default_flow_style=False)
@@ -340,7 +337,7 @@ def main():
     stats = None
     try:
         from dexmachina.eval.compute_add import compute_for_eval
-        obj_name = dex_args.clip.split("-")[0]
+        obj_name = clip_name.split("-")[0]
         eval_file_path = os.path.join(out_dir, "eval_ep0.npy")
         stats_path = os.path.join(out_dir, "add_stats.json")
         compute_for_eval(
@@ -362,22 +359,21 @@ def main():
     # Sync metrics and video to WandB if wandb_run_id is provided
     if args.wandb_run_id:
         print(f"[INFO] Connecting to WandB run {args.wandb_run_id} ({args.entity}/{args.project})...")
-        tokens = env_name.split("|")
-        hand_name = dex_args.hand if hasattr(dex_args, "hand") else (tokens[1] if len(tokens) > 1 else "unknown_hand")
-        clip_name = dex_args.clip if hasattr(dex_args, "clip") else (tokens[2] if len(tokens) > 2 else "unknown_clip")
         training_num_envs = int(saved_args.get("num_envs", 768))
         if UniversalLogger is not None:
             UniversalLogger.install(
                 algo="fast_td3",
                 hand=str(hand_name),
                 clip=str(clip_name),
-                seed=int(saved_args.get("seed", 0)),
+                seed=run_seed,
                 num_train_envs=training_num_envs,
                 num_eval_envs=int(args.num_envs),
                 is_eval=True,
             )
 
         wandb.init(id=args.wandb_run_id, project=args.project, entity=args.entity, resume="allow")
+        # Next to the training run's task_hash, so an evaluation on a different task shows up.
+        wandb.config.update({"eval_task_hash": eval_task_hash}, allow_val_change=True)
 
         log_payload = {
             "eval/return": ep_return,

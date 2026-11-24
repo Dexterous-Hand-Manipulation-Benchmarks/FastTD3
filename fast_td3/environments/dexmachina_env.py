@@ -1,60 +1,110 @@
+from dataclasses import dataclass, replace
+
 import torch
 import numpy as np
 
+from dexmachina.envs.base_env import BaseEnv
+from dexmachina.envs.benchmark_task import RunChoices, benchmark_spec
+from dexmachina.envs.constructors import get_all_env_cfg
+from dexmachina.envs.spec import EnvSpec
+from dexmachina.envs.vec_env import DexMachinaVecEnv
 
-def apply_dexmachina_env_name(args):
-    """Parse ``args.env_name`` ("dexmachina|<hand>|<clip>") into ``args.hand`` / ``args.clip``.
+ENV_NAME_PREFIX = "dexmachina"
+ENV_NAME_SEPARATOR = "|"
+# Caps the evaluation envs to avoid CUDA out-of-memory errors next to the training env.
+MAX_EVAL_ENVS = 32
 
-    Also maps tyro-friendly defaults back to the ``None`` values dexmachina expects.
-    Returns ``(hand_name, clip_name)``.
-    """
-    parts = args.env_name.split("|")
-    hand_name = parts[1] if len(parts) > 1 else "allegro_hand"
-    clip_name = parts[2] if len(parts) > 2 else "box-30-230"
-    args.hand = hand_name
-    args.clip = clip_name
 
-    # Handle 'None' defaults that tyro doesn't parse cleanly
-    if args.n_envs_per_row == 0:
-        args.n_envs_per_row = None
-    if args.color_object == "":
-        args.color_object = None
-    return hand_name, clip_name
+def parse_env_name(env_name: str) -> tuple[str, str]:
+    """Hand and clip from ``"dexmachina|<hand>|<clip>"``."""
+    parts = env_name.split(ENV_NAME_SEPARATOR)
+    if len(parts) != 3 or parts[0] != ENV_NAME_PREFIX:
+        raise ValueError(
+            f"env_name {env_name!r} is not 'dexmachina|<hand>|<clip>', e.g. 'dexmachina|allegro_hand|box-30-230'. "
+            "The hand and clip decide the task, so there is no default for them."
+        )
+    return parts[1], parts[2]
+
+
+def benchmark_env_spec(env_name: str, seed: int, num_envs: int) -> EnvSpec:
+    """The shared benchmark task for this run; FastTD3 chooses only hand, clip, seed and num_envs."""
+    hand, clip = parse_env_name(env_name)
+    return benchmark_spec(RunChoices(hand=hand, clip=clip, seed=seed, num_envs=num_envs))
+
+
+def eval_env_kwargs(spec: EnvSpec, device: str) -> dict:
+    """BaseEnv kwargs for evaluating on the spec's task: no early resets, randomization, assistance or curriculum."""
+    env_kwargs = get_all_env_cfg(spec.to_args(), device=device)
+    env_kwargs["env_cfg"]["is_eval"] = True
+    env_kwargs["env_cfg"]["early_reset_threshold"] = 0.0
+    env_kwargs["rand_cfg"]["randomize"] = False
+    env_kwargs["env_cfg"]["rand_init_ratio"] = 0.0
+    for cfg in env_kwargs["object_cfgs"].values():
+        cfg["actuated"] = False
+    env_kwargs.pop("curriculum_cfg", None)
+    return env_kwargs
+
+
+@dataclass(frozen=True)
+class DexMachinaEnvs:
+    train: "GenesisFastTD3Wrapper"
+    evaluation: "GenesisFastTD3Wrapper"
+    render: "GenesisFastTD3Wrapper"
+
+
+def build_dexmachina_envs(spec: EnvSpec, device: str, num_eval_envs: int) -> DexMachinaEnvs:
+    """Training env on the spec, plus evaluation and single-env render envs on the same task."""
+    train = GenesisFastTD3Wrapper(DexMachinaVecEnv.from_spec(spec, device, reward_overrides={}), rl_device=device)
+    eval_spec = replace(spec, num_envs=min(num_eval_envs, MAX_EVAL_ENVS))
+    eval_env = GenesisFastTD3Wrapper(
+        DexMachinaVecEnv(BaseEnv(**eval_env_kwargs(eval_spec, device))), rl_device=device
+    )
+    render_spec = replace(spec, num_envs=1, record_video=True)
+    render = GenesisFastTD3Wrapper(
+        DexMachinaVecEnv(BaseEnv(**eval_env_kwargs(render_spec, device))), rl_device=device
+    )
+    if render.base_env._floating_camera is None:
+        raise RuntimeError(
+            "The DexMachina render env was built without a camera, so rendered videos would be black. "
+            "It is built with record_video=True; check how get_all_env_cfg sets up the camera."
+        )
+    return DexMachinaEnvs(train=train, evaluation=eval_env, render=render)
+
+
+def advance_curriculum(envs: "GenesisFastTD3Wrapper", global_step: int, total_timesteps: int, current_epoch: int) -> int:
+    """Spreads the spec's max_epochs evenly over the run; returns the curriculum epoch now in effect."""
+    epoch = (global_step * envs.spec.max_epochs) // total_timesteps
+    if epoch > current_epoch:
+        envs.base_env.set_curriculum(epoch)
+        return epoch
+    return current_epoch
 
 
 class GenesisFastTD3Wrapper:
     """
-    Wraps Dexmachina's BaseEnv to be natively compatible with FastTD3.
+    Wraps a DexMachinaVecEnv to be natively compatible with FastTD3.
     """
 
-    def __init__(self, env, rl_device="cuda:0"):
-        self.env = env
+    def __init__(self, vec_env: DexMachinaVecEnv, rl_device="cuda:0"):
+        self.vec_env = vec_env
+        self.base_env = vec_env.env
+        self.spec = vec_env.spec
         self.sim_device = rl_device
-        self._clip_actions = self.env.action_clip
+        self._clip_actions = self.base_env.action_clip
 
         # FastTD3 explicitly looks for these attributes instead of gym spaces
-        self.num_envs = self.env.num_envs
-        self.num_obs = self.env.obs_dim
-        self.num_actions = self.env.action_dim
+        self.num_envs = self.base_env.num_envs
+        self.num_obs = self.base_env.obs_dim
+        self.num_actions = self.base_env.action_dim
         self.asymmetric_obs = False
-
-        # Try to pull max_episode_length if Dexmachina defines it, otherwise default to 1000
-        self.max_episode_steps = getattr(self.env, "max_episode_length", 1000)
+        self.max_episode_steps = self.base_env.max_episode_length
 
     def reset(self):
         """
         FastTD3's reset() expects ONLY the observation tensor to be returned.
         """
-        obs_dict, extras = self.env.reset()
-        obs = obs_dict["policy"] if isinstance(obs_dict, dict) else obs_dict
-
-        # Ensure we are returning a float tensor on the correct device
-        if not isinstance(obs, torch.Tensor):
-            obs = torch.tensor(obs, device=self.sim_device, dtype=torch.float32)
-        else:
-            obs = obs.to(self.sim_device, dtype=torch.float32)
-
-        return obs
+        obs, _ = self.vec_env.reset()
+        return obs.to(self.sim_device, dtype=torch.float32)
 
     def step(self, actions):
         """
@@ -80,19 +130,7 @@ class GenesisFastTD3Wrapper:
         # Clamp actions based on environment limits
         actions = torch.clamp(actions, -self._clip_actions, self._clip_actions)
 
-        # Step the Dexmachina simulator
-        obs_dict, rew, terminated, truncated, extras = self.env.step(actions)
-        obs = obs_dict["policy"] if isinstance(obs_dict, dict) else obs_dict
-
-        # Cast outputs to standard tensors for FastTD3
-        if not isinstance(obs, torch.Tensor):
-            obs = torch.tensor(obs, device=self.sim_device, dtype=torch.float32)
-        if not isinstance(rew, torch.Tensor):
-            rew = torch.tensor(rew, device=self.sim_device, dtype=torch.float32)
-        if not isinstance(terminated, torch.Tensor):
-            terminated = torch.tensor(terminated, device=self.sim_device, dtype=torch.bool)
-        if not isinstance(truncated, torch.Tensor):
-            truncated = torch.tensor(truncated, device=self.sim_device, dtype=torch.bool)
+        obs, rew, terminated, truncated, info = self.vec_env.step(actions)
 
         # NaN safeguards against simulation divergence
         if torch.isnan(obs).any():
@@ -100,50 +138,34 @@ class GenesisFastTD3Wrapper:
         if torch.isnan(rew).any():
             rew = torch.nan_to_num(rew, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # FastTD3 expects a unified `dones` tensor
         dones = terminated | truncated
 
-        # --- FastTD3 Info Formatting ---
         infos = {}
+        # The vec env reports only chunk time-outs as truncated; every other episode end is terminated.
+        infos["time_outs"] = truncated
+        # The observation an ended episode had before the same-step reset.
+        infos["observations"] = {"raw": {"obs": info["final_obs"]}}
+        infos["episode_info"] = info["log"]
 
-        # 1. Truncated timeouts
-        infos["time_outs"] = truncated.clone()
-
-        # 2. Terminal Observations.
-        # Since GPU simulators typically auto-reset and return the new first-step obs,
-        # FastTD3 needs the actual terminal observation to compute accurate bootstrapping.
-        # If Dexmachina provides it in `extras`, use it; otherwise fallback to current obs.
-        terminal_obs = extras.get("final_obs", extras.get("terminal_observation", obs)).clone()
-
-        infos["observations"] = {
-            "raw": {
-                "obs": terminal_obs
-            }
-        }
-
-        # Carry over any logging info
-        if "log" in extras:
-            infos["episode_info"] = extras["log"]
-
-        # 3. Success and Tracking Error Metrics for Online Validation
-        if hasattr(self.env, "rew_dict") and isinstance(self.env.rew_dict, dict):
-            pos_dist = self.env.rew_dict.get("pos_dist", None)
-            rot_dist = self.env.rew_dict.get("rot_dist", None)
-            arti_dist = self.env.rew_dict.get("arti_dist", None)
-            if pos_dist is not None and rot_dist is not None:
-                # 2cm threshold: pos error < 0.02m and rot error < 0.20 rad (~11.5 deg)
-                succ_2cm = (pos_dist < 0.02) & (rot_dist < 0.20)
-                # 5cm threshold: pos error < 0.05m and rot error < 0.35 rad (~20 deg)
-                succ_5cm = (pos_dist < 0.05) & (rot_dist < 0.35)
-                if arti_dist is not None:
-                    succ_2cm = succ_2cm & (arti_dist < 0.10)
-                    succ_5cm = succ_5cm & (arti_dist < 0.15)
-                infos["success_2cm"] = succ_2cm
-                infos["success_5cm"] = succ_5cm
-                infos["pos_dist"] = pos_dist
-                infos["rot_dist"] = rot_dist
-                if arti_dist is not None:
-                    infos["arti_dist"] = arti_dist
+        # Success and Tracking Error Metrics for Online Validation
+        rew_dict = self.base_env.rew_dict
+        pos_dist = rew_dict.get("pos_dist", None)
+        rot_dist = rew_dict.get("rot_dist", None)
+        arti_dist = rew_dict.get("arti_dist", None)
+        if pos_dist is not None and rot_dist is not None:
+            # 2cm threshold: pos error < 0.02m and rot error < 0.20 rad (~11.5 deg)
+            succ_2cm = (pos_dist < 0.02) & (rot_dist < 0.20)
+            # 5cm threshold: pos error < 0.05m and rot error < 0.35 rad (~20 deg)
+            succ_5cm = (pos_dist < 0.05) & (rot_dist < 0.35)
+            if arti_dist is not None:
+                succ_2cm = succ_2cm & (arti_dist < 0.10)
+                succ_5cm = succ_5cm & (arti_dist < 0.15)
+            infos["success_2cm"] = succ_2cm
+            infos["success_5cm"] = succ_5cm
+            infos["pos_dist"] = pos_dist
+            infos["rot_dist"] = rot_dist
+            if arti_dist is not None:
+                infos["arti_dist"] = arti_dist
 
         return obs, rew, dones, infos
 
@@ -151,10 +173,10 @@ class GenesisFastTD3Wrapper:
         """
         Renders the environment using Dexmachina's natively initialized floating camera.
         """
-        if hasattr(self.env, "_floating_camera") and self.env._floating_camera is not None:
+        if self.base_env._floating_camera is not None:
             try:
                 # Force Genesis to render the frame
-                render_out = self.env._floating_camera.render()
+                render_out = self.base_env._floating_camera.render()
                 image = render_out[0] if isinstance(render_out, tuple) else render_out
 
                 # Move tensor to CPU numpy array
@@ -181,12 +203,11 @@ class GenesisFastTD3Wrapper:
         else:
             # Only print once to avoid spamming the console
             if not hasattr(self, "_camera_warning_printed"):
-                print("[DEBUG] self.env._floating_camera is missing. Did you pass env.record_video=True?")
+                print("[DEBUG] self.base_env._floating_camera is missing: the env was built without record_video.")
                 self._camera_warning_printed = True
 
         # Ultimate Fallback (Dexmachina cameras default to 160x160 resolution)
         return np.zeros((1, 160, 160, 3), dtype=np.uint8)
 
     def close(self):
-        if hasattr(self.env, "close"):
-            self.env.close()
+        self.vec_env.close()

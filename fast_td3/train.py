@@ -10,6 +10,7 @@ else:
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["JAX_DEFAULT_MATMUL_PRECISION"] = "highest"
 
+import json
 import random
 import time
 import math
@@ -166,73 +167,26 @@ def main():
         import genesis as gs
         gs.init(backend=gs.gpu, logging_level="warning")
 
-        from environments.dexmachina_env import GenesisFastTD3Wrapper, apply_dexmachina_env_name
-        from dexmachina.envs.constructors import get_all_env_cfg
-        from dexmachina.envs import BaseEnv
-
-        # Parse "dexmachina|<hand>|<clip>" into args.hand / args.clip
-        hand_name, clip_name = apply_dexmachina_env_name(args)
+        from environments.dexmachina_env import advance_curriculum, benchmark_env_spec, build_dexmachina_envs
+        from dexmachina.envs.factory import task_hash
 
         # FastTD3 uses device_rank instead of device
         sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
-
-        dex_args = args
-
-        print(f"[INFO] Building Dexmachina env: {hand_name} / {clip_name}")
-
-        # FastTD3 uses device_rank instead of device
-        sim_device = f"cuda:{getattr(args, 'device_rank', 0)}"
-
-        env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
-        base_env = BaseEnv(**env_kwargs)
-
-        # Wrap it for FastTD3
-        envs = GenesisFastTD3Wrapper(base_env, rl_device=sim_device)
+        env_spec = benchmark_env_spec(args.env_name, args.seed, args.num_envs)
+        print(f"[INFO] Building Dexmachina envs: {env_spec.hand} / {env_spec.clip}")
+        dex_envs = build_dexmachina_envs(env_spec, sim_device, args.num_eval_envs)
+        envs, eval_envs, render_env = dex_envs.train, dex_envs.evaluation, dex_envs.render
         env_type = "dexmachina"
 
-        print(f"[INFO] Building Dexmachina EVALUATION env (Unassisted True Physics)...")
-        original_num_envs = args.num_envs
-        # Cap the evaluation environments to 64 to prevent CUDA OOM errors
-        eval_num = min(getattr(args, "num_eval_envs", 32), 32)
-        dex_args.num_envs = eval_num
-
-        eval_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
-        eval_env_kwargs['env_cfg']['is_eval'] = True
-        eval_env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
-        eval_env_kwargs['rand_cfg']['randomize'] = False
-        eval_env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
-        for name, cfg in eval_env_kwargs['object_cfgs'].items():
-            cfg['actuated'] = False
-        eval_env_kwargs.pop("curriculum_cfg", None)
-
-        eval_base_env = BaseEnv(**eval_env_kwargs)
-        eval_envs = GenesisFastTD3Wrapper(eval_base_env, rl_device=sim_device)
-
-        print(f"[INFO] Building Dexmachina RENDER env (Unassisted True Physics)...")
-        dex_args.num_envs = 1  # We only need 1 environment to record a video!
-
-        render_env_kwargs = get_all_env_cfg(dex_args, device=sim_device)
-        render_env_kwargs['env_cfg']['is_eval'] = True
-        render_env_kwargs['env_cfg']['early_reset_threshold'] = 0.0
-        render_env_kwargs['rand_cfg']['randomize'] = False
-        render_env_kwargs['env_cfg']['rand_init_ratio'] = 0.0
-        for name, cfg in render_env_kwargs['object_cfgs'].items():
-            cfg['actuated'] = False
-        render_env_kwargs.pop("curriculum_cfg", None)
-
-        render_base_env = BaseEnv(**render_env_kwargs)
-        render_env = GenesisFastTD3Wrapper(render_base_env, rl_device=sim_device)
-        
-        args.num_envs = original_num_envs
-
-        try:
-            final_reward_config = envs.env.reward_module.cfg
-            # Log it to WandB
-            wandb.config.update({"dex_rewards": final_reward_config}, allow_val_change=True)
-            print("[INFO] Successfully logged Dexmachina reward config to WandB.")
-
-        except AttributeError as e:
-            print(f"[WARNING] Could not find reward config to log: {e}")
+        if args.use_wandb:
+            wandb.config.update(
+                {
+                    "env_spec": json.loads(env_spec.to_json()),
+                    "task_hash": task_hash(env_spec),
+                    "dex_rewards": envs.base_env.reward_module.cfg,
+                },
+                allow_val_change=True,
+            )
 
         # Building a DexMachina env reseeds numpy/torch with a fixed seed (curriculum, ADD vertex sampling),
         # so seed again before the agent is built and samples.
@@ -529,7 +483,7 @@ def main():
             reset_out = render_env.reset()
             obs = reset_out[0] if isinstance(reset_out, tuple) else reset_out
             # 2. Grab the first RGB frame from the floating camera
-            base = getattr(render_env, "env", getattr(render_env, "base_env", render_env))
+            base = render_env.base_env
             render_out = base._floating_camera.render()
             frame = render_out[0] if isinstance(render_out, tuple) else render_out
             renders = [frame]
@@ -557,7 +511,7 @@ def main():
                     renders.append(render_env.render())
                 elif env_type == "dexmachina":
                     # Capture subsequent frames during the rollout
-                    base = getattr(render_env, "env", getattr(render_env, "base_env", render_env))
+                    base = render_env.base_env
                     render_out = base._floating_camera.render()
                     frame = render_out[0] if isinstance(render_out, tuple) else render_out
                     renders.append(frame)
@@ -760,12 +714,8 @@ def main():
     best_eval_score = -float("inf")
 
     while global_step < args.total_timesteps:
-        if hasattr(envs, "env") and hasattr(envs.env, "set_curriculum"):
-            max_epochs = getattr(args, "max_epochs", 5000)
-            epoch = (global_step * max_epochs) // args.total_timesteps
-            if epoch > current_epoch:
-                envs.env.set_curriculum(epoch)
-                current_epoch = epoch
+        if env_type == "dexmachina":
+            current_epoch = advance_curriculum(envs, global_step, args.total_timesteps, current_epoch)
 
         mark_step()
         logs_dict = TensorDict()
