@@ -202,8 +202,8 @@ def main():
                 allow_val_change=True,
             )
 
-        # Building a DexMachina env reseeds numpy/torch with a fixed seed (curriculum, ADD vertex sampling),
-        # so seed again before the agent is built and samples.
+        # The agent's initial state must follow the run seed alone, whatever building the envs did to the global
+        # RNGs: seed again.
         seed_rngs(args.seed)
 
     else:
