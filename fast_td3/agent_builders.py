@@ -4,11 +4,11 @@ import math
 from types import ModuleType
 from typing import Any, Optional
 
+import fast_td3_simbav2
 import torch.nn as nn
+from fast_td3_utils import EmpiricalNormalization
 
 import fast_td3
-import fast_td3_simbav2
-from fast_td3_utils import EmpiricalNormalization
 
 AGENT_MODULES = {"fasttd3": fast_td3, "fasttd3_simbav2": fast_td3_simbav2}
 

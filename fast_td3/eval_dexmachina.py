@@ -10,6 +10,7 @@ replaced.
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -33,6 +34,7 @@ from dexmachina.envs.factory import make_eval_env, task_hash
 from dexmachina.envs.run_spec import RUN_SPEC_FILENAME, load_run_spec
 from environments.dexmachina_env import benchmark_env_spec
 from fast_td3_utils import WANDB_RUN_FILENAME
+from genesis.constants import backend as gs_backend
 from genesis.utils import set_random_seed
 
 SHORT_SHA_LENGTH = 12
@@ -161,20 +163,28 @@ def evaluate(
     )
 
 
-def recorded_wandb_run(run_dir: Path) -> dict[str, str | None]:
-    """The W&B run the checkpoints in `run_dir` were trained in (id, project, entity)."""
+@dataclass(frozen=True)
+class RecordedWandbRun:
+    """The W&B run the checkpoints in a run directory were trained in, as train.py recorded it."""
+
+    id: str
+    project: str
+    entity: str | None
+
+
+def recorded_wandb_run(run_dir: Path) -> RecordedWandbRun:
     path = run_dir / WANDB_RUN_FILENAME
     if not path.is_file():
         raise FileNotFoundError(
             f"{path} does not exist: the run trained without W&B, offline, or before FastTD3 recorded its W&B run. "
             "Evaluate without --wandb."
         )
-    return json.loads(path.read_text())
+    return RecordedWandbRun(**json.loads(path.read_text()))
 
 
-def resume_wandb_run(identity: dict[str, str | None]) -> Any:
+def resume_wandb_run(recorded: RecordedWandbRun) -> Any:
     """The training run, resumed, with the benchmark keys plotted against benchmark/env_step."""
-    run = wandb.init(id=identity["id"], project=identity["project"], entity=identity["entity"], resume="must")
+    run = wandb.init(id=recorded.id, project=recorded.project, entity=recorded.entity, resume="must")
     wandb.define_metric(f"{BENCHMARK_PREFIX}/*", step_metric=f"{BENCHMARK_PREFIX}/env_step")
     return run
 
@@ -185,7 +195,7 @@ def log_evaluation(run: Any, evaluation: BenchmarkEvaluation) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", type=Path, required=True, help="a step*.pt or final.pt of a FastTD3 run")
     parser.add_argument("--device", type=str, default="cuda:0", help="device of the env and the actor")
     parser.add_argument("--eval-seed", type=int, default=EVAL_SEED,
@@ -201,10 +211,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     checkpoint = args.checkpoint.resolve()
-    identity = recorded_wandb_run(checkpoint.parent) if args.wandb else None
-    gs.init(backend=gs.cpu if args.device.startswith("cpu") else gs.gpu, logging_level="warning")
+    recorded = recorded_wandb_run(checkpoint.parent) if args.wandb else None
+    gs.init(backend=gs_backend.cpu if args.device.startswith("cpu") else gs_backend.gpu, logging_level="warning")
     # Resumed before the evaluation, so a W&B failure stops it before it writes its trajectory.
-    run = resume_wandb_run(identity) if identity is not None else None
+    run = resume_wandb_run(recorded) if recorded is not None else None
     try:
         evaluation = evaluate(
             checkpoint, args.device, eval_seed=args.eval_seed, allow_dirty_dexmachina=args.allow_dirty_dexmachina
