@@ -817,15 +817,18 @@ def main():
                     step=env_step,
                 )
 
+            steps_done = global_step + 1
             if (
                     args.save_interval > 0
                     and global_step > 0
                     and global_step % args.save_interval == 0
+                    # The last iteration's weights are saved as final.pt right after the loop.
+                    and steps_done < args.total_timesteps
             ):
-                ckpt_path = f"{checkpoint_dir}/step{global_step}.pt"
-                print(f"[INFO] Saving checkpoint at global step {global_step} to: {ckpt_path}")
+                ckpt_path = f"{checkpoint_dir}/step{steps_done}.pt"
+                print(f"[INFO] Saving checkpoint after {steps_done} iterations to: {ckpt_path}")
                 save_params(
-                    global_step,
+                    steps_done,
                     actor,
                     qnet,
                     qnet_target,
