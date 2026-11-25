@@ -375,18 +375,21 @@ def main():
                 break
             obs = next_obs
 
+        # A training diagnostic under fast_td3/, never the benchmark score (benchmark/*, from eval_dexmachina.py).
+        # On DexMachina the successes are pose thresholds, not ADD, and every average is biased: it includes the eval
+        # env's last env, which is_eval never steps.
         eval_out = {
-            "eval_avg_return": episode_returns.mean().item(),
-            "eval_avg_length": episode_lengths.mean().item(),
+            "fast_td3/eval_return": episode_returns.mean().item(),
+            "fast_td3/eval_length": episode_lengths.mean().item(),
         }
         if succ_2cm_list:
-            eval_out["eval/success_2cm"] = torch.stack(succ_2cm_list).mean().item()
+            eval_out["fast_td3/pose_success_2cm"] = torch.stack(succ_2cm_list).mean().item()
         if succ_5cm_list:
-            eval_out["eval/success_5cm"] = torch.stack(succ_5cm_list).mean().item()
+            eval_out["fast_td3/pose_success_5cm"] = torch.stack(succ_5cm_list).mean().item()
         if pos_dist_list:
-            eval_out["eval/pos_dist"] = torch.stack(pos_dist_list).mean().item()
+            eval_out["fast_td3/pos_dist"] = torch.stack(pos_dist_list).mean().item()
         if rot_dist_list:
-            eval_out["eval/rot_dist"] = torch.stack(rot_dist_list).mean().item()
+            eval_out["fast_td3/rot_dist"] = torch.stack(rot_dist_list).mean().item()
 
         return eval_out
 
@@ -617,7 +620,6 @@ def main():
     desc = ""
     current_epoch = -1
     latest_episode_info = {}
-    best_eval_score = -float("inf")
 
     while global_step < args.total_timesteps:
         if env_type == "dexmachina":
@@ -768,28 +770,6 @@ def main():
                     obs = envs.reset()
                 logs.update(eval_metrics)
 
-                # Track and save best checkpoint based on eval score
-                current_score = eval_metrics.get(
-                    "eval/success_2cm",
-                    eval_metrics.get("eval/success_5cm", eval_metrics.get("eval_avg_return", -float("inf"))),
-                )
-                if current_score > best_eval_score:
-                    best_eval_score = current_score
-                    best_ckpt_path = f"{checkpoint_dir}/best.pt"
-                    print(
-                        f"[INFO] New best eval score ({best_eval_score:.4f}) at step {global_step}! Saving to: {best_ckpt_path}"
-                    )
-                    save_params(
-                        global_step,
-                        actor,
-                        qnet,
-                        qnet_target,
-                        obs_normalizer,
-                        critic_obs_normalizer,
-                        args,
-                        best_ckpt_path,
-                    )
-
             # Independent Render Interval
             if (
                 args.render_interval > 0
@@ -859,19 +839,6 @@ def main():
         args,
         final_ckpt_path,
     )
-
-    best_ckpt_path = f"{checkpoint_dir}/best.pt"
-    if not os.path.exists(best_ckpt_path):
-        save_params(
-            global_step,
-            actor,
-            qnet,
-            qnet_target,
-            obs_normalizer,
-            critic_obs_normalizer,
-            args,
-            best_ckpt_path,
-        )
 
 
 if __name__ == "__main__":
