@@ -1,5 +1,7 @@
+import json
 import os
 
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -745,6 +747,27 @@ class PerTaskRewardNormalizer(nn.Module):
             task_ids (torch.Tensor): Task indices, shape [num_envs].
         """
         return self._scale_reward(rewards, task_ids)
+
+
+WANDB_RUN_FILENAME = "wandb_run.json"
+
+
+def save_wandb_run(checkpoint_dir: Path, run) -> None:
+    """Records the W&B run the checkpoints in `checkpoint_dir` belong to, so their evaluation logs into it.
+
+    An offline or disabled run gets no file: its id cannot be resumed online.
+    """
+    if run.offline or run.disabled:
+        return
+    path = checkpoint_dir / WANDB_RUN_FILENAME
+    if path.exists():
+        raise FileExistsError(
+            f"{path} exists already: the checkpoints next to it belong to another W&B run. "
+            "Start the run in a new checkpoint directory."
+        )
+    # W&B reports an unset entity as "", which wandb.init would not read as "your default".
+    identity = {"id": run.id, "project": run.project, "entity": run.entity or None}
+    path.write_text(json.dumps(identity, indent=2) + "\n")
 
 
 def cpu_state(sd):

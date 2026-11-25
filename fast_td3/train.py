@@ -51,6 +51,7 @@ from fast_td3_utils import (
     PerTaskRewardNormalizer,
     SimpleReplayBuffer,
     save_params,
+    save_wandb_run,
     mark_step,
 )
 from hyperparams import get_args
@@ -191,6 +192,7 @@ def main():
         save_run_spec(Path(checkpoint_dir), env_spec, envs.vec_env.reward_overrides)
 
         if args.use_wandb:
+            save_wandb_run(Path(checkpoint_dir), wandb.run)
             wandb.config.update(
                 {
                     "env_spec": json.loads(env_spec.to_json()),
