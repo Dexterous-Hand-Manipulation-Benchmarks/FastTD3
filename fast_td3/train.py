@@ -13,7 +13,6 @@ os.environ["JAX_DEFAULT_MATMUL_PRECISION"] = "highest"
 import json
 import random
 import time
-import math
 from pathlib import Path
 
 # Changed: Imported specific columns to customize the progress bar
@@ -48,7 +47,6 @@ except ImportError:
     UniversalLogger = None
 
 from fast_td3_utils import (
-    EmpiricalNormalization,
     RewardNormalizer,
     PerTaskRewardNormalizer,
     SimpleReplayBuffer,
@@ -56,6 +54,11 @@ from fast_td3_utils import (
     mark_step,
 )
 from hyperparams import get_args
+from agent_builders import (
+    actor_class_and_kwargs,
+    build_obs_normalizer,
+    critic_class_and_kwargs,
+)
 
 torch.set_float32_matmul_precision("high")
 
@@ -229,14 +232,10 @@ def main():
         n_critic_obs = n_obs
     action_low, action_high = -1.0, 1.0
 
-    if args.obs_normalization:
-        obs_normalizer = EmpiricalNormalization(shape=n_obs, device=device)
-        critic_obs_normalizer = EmpiricalNormalization(
-            shape=n_critic_obs, device=device
-        )
-    else:
-        obs_normalizer = nn.Identity()
-        critic_obs_normalizer = nn.Identity()
+    obs_normalizer = build_obs_normalizer(args.obs_normalization, n_obs, device)
+    critic_obs_normalizer = build_obs_normalizer(
+        args.obs_normalization, n_critic_obs, device
+    )
 
     if args.reward_normalization:
         if env_type in ["mtbench"]:
@@ -255,103 +254,14 @@ def main():
     else:
         reward_normalizer = nn.Identity()
 
-    actor_kwargs = {
-        "n_obs": n_obs,
-        "n_act": n_act,
-        "num_envs": args.num_envs,
-        "device": device,
-        "init_scale": args.init_scale,
-        "hidden_dim": args.actor_hidden_dim,
-        "std_min": args.std_min,
-        "std_max": args.std_max,
-    }
-    critic_kwargs = {
-        "n_obs": n_critic_obs,
-        "n_act": n_act,
-        "num_atoms": args.num_atoms,
-        "v_min": args.v_min,
-        "v_max": args.v_max,
-        "hidden_dim": args.critic_hidden_dim,
-        "device": device,
-    }
-
-    if env_type == "mtbench":
-        actor_kwargs["n_obs"] = n_obs - envs.num_tasks + args.task_embedding_dim
-        critic_kwargs["n_obs"] = n_critic_obs - envs.num_tasks + args.task_embedding_dim
-        actor_kwargs["num_tasks"] = envs.num_tasks
-        actor_kwargs["task_embedding_dim"] = args.task_embedding_dim
-        critic_kwargs["num_tasks"] = envs.num_tasks
-        critic_kwargs["task_embedding_dim"] = args.task_embedding_dim
-
-    if args.agent == "fasttd3":
-        if env_type in ["mtbench"]:
-            from fast_td3 import MultiTaskActor, MultiTaskCritic
-
-            actor_cls = MultiTaskActor
-            critic_cls = MultiTaskCritic
-        else:
-            from fast_td3 import Actor, Critic
-
-            actor_cls = Actor
-            critic_cls = Critic
-
-        actor_kwargs.update(
-            {
-                "sim_type": args.sim_type,
-                "sim_dimension": args.sim_dimension,
-                "seq_len": args.actor_seq_len,
-            }
-        )
-        critic_kwargs.update(
-            {
-                "sim_type": args.sim_type,
-                "sim_dimension": args.sim_dimension,
-                "seq_len": args.critic_seq_len,
-            }
-        )
-
-        print("Using FastTD3")
-    elif args.agent == "fasttd3_simbav2":
-        if args.sim_type:
-            raise ValueError("SimNorm options are only supported with agent='fasttd3'")
-
-        if env_type in ["mtbench"]:
-            from fast_td3_simbav2 import MultiTaskActor, MultiTaskCritic
-
-            actor_cls = MultiTaskActor
-            critic_cls = MultiTaskCritic
-        else:
-            from fast_td3_simbav2 import Actor, Critic
-
-            actor_cls = Actor
-            critic_cls = Critic
-
-        print("Using FastTD3 + SimbaV2")
-        actor_kwargs.pop("init_scale")
-        actor_kwargs.update(
-            {
-                "scaler_init": math.sqrt(2.0 / args.actor_hidden_dim),
-                "scaler_scale": math.sqrt(2.0 / args.actor_hidden_dim),
-                "alpha_init": 1.0 / (args.actor_num_blocks + 1),
-                "alpha_scale": 1.0 / math.sqrt(args.actor_hidden_dim),
-                "expansion": 4,
-                "c_shift": 3.0,
-                "num_blocks": args.actor_num_blocks,
-            }
-        )
-        critic_kwargs.update(
-            {
-                "scaler_init": math.sqrt(2.0 / args.critic_hidden_dim),
-                "scaler_scale": math.sqrt(2.0 / args.critic_hidden_dim),
-                "alpha_init": 1.0 / (args.critic_num_blocks + 1),
-                "alpha_scale": 1.0 / math.sqrt(args.critic_hidden_dim),
-                "num_blocks": args.critic_num_blocks,
-                "expansion": 4,
-                "c_shift": 3.0,
-            }
-        )
-    else:
-        raise ValueError(f"Agent {args.agent} not supported")
+    num_tasks = envs.num_tasks if env_type in ["mtbench"] else None
+    actor_cls, actor_kwargs = actor_class_and_kwargs(
+        args, n_obs, n_act, args.num_envs, device, num_tasks=num_tasks
+    )
+    critic_cls, critic_kwargs = critic_class_and_kwargs(
+        args, n_critic_obs, n_act, device, num_tasks=num_tasks
+    )
+    print("Using FastTD3" if args.agent == "fasttd3" else "Using FastTD3 + SimbaV2")
 
     actor = actor_cls(**actor_kwargs)
 
